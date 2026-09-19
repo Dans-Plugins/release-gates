@@ -29,6 +29,11 @@ on:
         description: "URL of the candidate jar"
         required: true
         type: string
+      baseline_jar_url:
+        description: "URL of the current stable jar; when given, every dependent is first booted against it so a dependent that is already broken is reported, not blamed on the candidate"
+        required: false
+        type: string
+        default: ""
       dependents:
         description: "Comma-separated owner/repo list of plugins that depend on the candidate; each one's /releases/latest jar is the dependent under test"
         required: true
@@ -59,6 +64,10 @@ on:
       jar_url:
         required: true
         type: string
+      baseline_jar_url:
+        required: false
+        type: string
+        default: ""
       dependents:
         required: true
         type: string
@@ -114,6 +123,13 @@ jobs:
           curl -fsSL -o "work/candidate/$name" "${{ inputs.jar_url }}"
           unzip -l "work/candidate/$name" plugin.yml >/dev/null
           echo "CANDIDATE_JAR=$PWD/work/candidate/$name" >> "$GITHUB_ENV"
+          if [ -n "${{ inputs.baseline_jar_url }}" ]; then
+            mkdir -p work/baseline
+            bname=$(basename "${{ inputs.baseline_jar_url }}")
+            curl -fsSL -o "work/baseline/$bname" "${{ inputs.baseline_jar_url }}"
+            unzip -l "work/baseline/$bname" plugin.yml >/dev/null
+            echo "BASELINE_JAR=$PWD/work/baseline/$bname" >> "$GITHUB_ENV"
+          fi
 
       # Each extra dependency is resolved to its current *stable* release — the same
       # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.

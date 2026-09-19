@@ -452,12 +452,29 @@ def check_files_kept(n, fixture, data_paths, plugin_name):
 DB_CLOSE_FAILURE = re.compile(r"zip file closed|MVStoreException|OnExitDatabaseCloser|File corrupted while reading record")
 
 
+TRACE_GLOBS = ("*.trace.db", "plugins/*/*.trace.db", "*/*.trace.db")
+# Trace files and their sizes as they stood when the fixture was recorded — i.e. whatever
+# the BASELINE left behind. Only a trace file that is new, or that grew, is the candidate's.
+TRACE_BEFORE_CANDIDATE = {}
+
+
+def trace_files_now():
+    out = {}
+    for pattern in TRACE_GLOBS:
+        for path in expand_globs([pattern]):
+            ok, size, _ = docker_exec("sh", "-c", f"cd {SERVER_ROOT} && wc -c < '{path}'")
+            out[path] = int(size.strip() or 0) if ok else -1
+    return out
+
+
 def db_close_evidence(log):
+    """Console lines and trace files that show THIS release failed to close its database.
+    A trace file the baseline already left (same size) is not evidence against the candidate."""
     hits = [line.strip() for line in log.splitlines() if DB_CLOSE_FAILURE.search(line)]
-    traces = []
-    for pattern in ("*.trace.db", "plugins/*/*.trace.db", "*/*.trace.db"):
-        traces += expand_globs([pattern])
-    return hits, sorted(set(traces))
+    now = trace_files_now()
+    blamed = sorted(p for p, size in now.items()
+                    if p not in TRACE_BEFORE_CANDIDATE or size > TRACE_BEFORE_CANDIDATE[p])
+    return hits, blamed
 
 
 def stop(n, plugin_name, package_prefix):
@@ -474,7 +491,8 @@ def stop(n, plugin_name, package_prefix):
     if close_lines or trace_files:
         record(f"stop-{n}", False,
                "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
-    record(f"stop-{n}", True, "clean stop; no database close failure, no *.trace.db")
+    note = "; baseline had left a trace file, unchanged by the candidate" if TRACE_BEFORE_CANDIDATE else ""
+    record(f"stop-{n}", True, f"clean stop; no database close failure, no new or grown *.trace.db{note}")
 
 
 # --- main --------------------------------------------------------------------------------
@@ -535,6 +553,13 @@ def main():
         data_paths.append(f"plugins/{plugin_name}")
     data_paths += [p for p in expand_globs(EXTRA_DATA_PATHS) if p not in data_paths]
     DATA_PATHS.extend(data_paths)
+    # Anything the baseline left behind on its own shutdowns is a fact about the current
+    # stable release, not about the candidate. Record it, and use it as the reference point
+    # for the candidate's stop checks.
+    TRACE_BEFORE_CANDIDATE.update(trace_files_now())
+    if TRACE_BEFORE_CANDIDATE:
+        RESULT["baselineCloseFailure"] = sorted(TRACE_BEFORE_CANDIDATE)
+        print(f"  NOTE: the baseline ({baseline_name} v{RESULT.get('baselineVersion')}) left a database trace file after its own shutdown: {sorted(TRACE_BEFORE_CANDIDATE)} — the current stable release does not close its database cleanly")
     fixture_dir = os.path.join(WORK_DIR, "fixture")
     captured, fixture = capture(fixture_dir, data_paths)
     RESULT["fixtureFiles"] = len(fixture)

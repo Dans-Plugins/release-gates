@@ -149,7 +149,7 @@ Assertions, in order — the run stops at the first failure:
    or — a migration — as a byte-identical copy under the same name inside `plugins/<Name>/`.
    A removed file fails; a same-named file with different content does not count as migrated.
    Added files are reported.
-9. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` appeared anywhere under the server root and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
+9. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
 10. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
     the candidate itself wrote.
 
@@ -189,6 +189,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `sha` | yes | commit the candidate was built from — recorded in the result |
 | `jar_url` | yes | where to download the candidate |
 | `dependents` | yes | comma-separated `owner/repo` list of plugins that depend on the candidate; each one's `/releases/latest` jar is the dependent under test. A repository with no stable release is reported as `skipped: no stable release` and does not fail the gate — there is nothing an operator could be running. A repository that does not exist fails the run |
+| `baseline_jar_url` | no | the current stable jar; when given, every dependent is first booted against it (a **control** phase). A dependent that already fails there is reported as pre-existing and does not fail the gate; only a dependent that enables against the stable and not against the candidate — a regression — does. Trace files the stable leaves are attributed to it, not the candidate. |
 | `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list of *other* plugins the dependents need besides the candidate; each one's `/releases/latest` jar is installed alongside. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`). Usually empty |
 | `expected_version` | no | the version the candidate must report when enabling |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`) |
