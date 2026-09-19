@@ -258,7 +258,14 @@ def loaded_counts(log):
 
 
 def stop_server(label):
-    _api("POST", "/api/server/stop")
+    """Stop the server; a server that is already stopped (wrapper answers 409) counts as stopped."""
+    if not is_running():
+        return True
+    try:
+        _api("POST", "/api/server/stop")
+    except requests.HTTPError as e:
+        if e.response is None or e.response.status_code != 409:
+            raise
     return wait_for(lambda: not is_running(), 120, label)
 
 
