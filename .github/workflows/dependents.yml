@@ -15,9 +15,6 @@ name: Dependents gate
 # Spigot build is skipped.
 
 on:
-  # TEMPORARY: registers the workflow on this branch so it can be dispatched before merge.
-  push:
-    branches: [dependents]
   workflow_dispatch:
     inputs:
       repository:
@@ -87,7 +84,6 @@ concurrency:
 
 jobs:
   dependents:
-    if: github.event_name != 'push'
     name: ${{ inputs.repository }} @ ${{ inputs.sha }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
