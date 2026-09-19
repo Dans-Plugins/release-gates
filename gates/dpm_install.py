@@ -197,12 +197,16 @@ def boot_to_done(name):
 
 
 def attributable_errors(log, plugin_name, package_prefix):
-    """ERROR/SEVERE lines that name the plugin, plus stack frames inside its package."""
+    """ERROR/SEVERE lines that name the plugin, plus stack frames inside its package.
+
+    Console lines carry a `[time] [thread/LEVEL]:` prefix, so a frame is searched for
+    anywhere in the line, whatever level it was printed at.
+    """
     hits = []
     for line in log.splitlines():
         if ERROR_LINE.search(line) and (f"[{plugin_name}]" in line or plugin_name in line):
             hits.append(line.strip())
-        elif package_prefix and re.match(rf"\s*at {re.escape(package_prefix)}", line):
+        elif package_prefix and re.search(rf"\sat {re.escape(package_prefix)}", line):
             hits.append(line.strip())
     return hits
 
