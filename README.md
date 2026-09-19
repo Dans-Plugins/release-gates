@@ -15,7 +15,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 |---|---|---|
 | [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
 | [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
-| `save-compat.yml` | The candidate loads a fixture recorded by the previous stable release ([plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) without loss | planned |
+| [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides and console commands — migrates it, and keeps every file and every `<n> <label> loaded` count across its own restart | available |
 | `dependents.yml` | Every plugin that depends on the candidate still boots against it | planned |
 
 ## Boot gate
@@ -76,6 +76,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 |---|---|---|
 | `plugins` | yes | comma-separated DPM slugs, as listed by `/dpm list` (e.g. `easylinks,herald`) |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+| `dpm_jar_url` | no | a Dan's Plugin Manager jar to deploy instead of its `/releases/latest` one — how a candidate build of the installer itself is verified; `result.json` records `dpmSource: "input"` or `"latest"` |
 
 Assertions, in order:
 
@@ -98,6 +99,77 @@ gh workflow run dpm-install.yml --repo Dans-Plugins/release-gates \
   -f plugins=easylinks,foodspoilage,herald
 ```
 
+## Save-compatibility gate
+
+Proves that a candidate loads what the current stable release saved. The stable jar
+(`baseline_jar_url`) is booted on a fresh server, optionally given config overrides and a
+sequence of console commands so it has something to save, and restarted over its own data.
+Everything under `plugins/<Name>/` (plus any `extra_data_paths`) is then captured as a fixture
+and the candidate is booted over it twice — once to migrate, once to prove it can read back
+what it wrote itself.
+
+Inputs, identical for `workflow_dispatch` and `workflow_call`:
+
+| Input | Required | Meaning |
+|---|---|---|
+| `repository` | yes | `owner/repo` of the plugin — recorded in the result |
+| `sha` | yes | commit the candidate was built from — recorded in the result |
+| `jar_url` | yes | where to download the candidate |
+| `baseline_jar_url` | yes | where to download the current stable jar whose data the candidate must load |
+| `dependencies` | no | comma-separated `owner/repo` list; each one's `/releases/latest` jar is installed beside both jars, exactly as in the boot gate |
+| `expected_version` | no | the version the candidate must report when enabling |
+| `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+| `config_overrides` | no | newline-separated `dotted.key: value` lines applied to `plugins/<Name>/config.yml` after the baseline's first boot (the file is re-serialised, so comments are lost); `<Name>` is the plugin.yml `name:` |
+| `scenario` | no | newline-separated console commands sent to the baseline, about 3 s apart, after the overrides and a restart |
+| `extra_data_paths` | no | newline-separated server-root-relative glob patterns to capture beyond `plugins/<Name>/`, e.g. `medieval_factions_db*` for a plugin whose H2 file sits in the server root |
+
+Assertions, in order — the run stops at the first failure:
+
+1. **baseline-boot** — dependency jars and the baseline jar are deployed; after a restart the
+   baseline logs `Enabling <name> v<version>` with no enable failure and no error attributable
+   to it.
+2. **config-overrides** — the overrides are applied and the baseline enables again over the
+   edited config. Passes with "none" when no overrides were given.
+3. **scenario** — each command is sent over the console; once the console has been quiet for
+   5 s, no error is attributable to the baseline. Passes with "none" when no scenario was given.
+4. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
+   line it prints during this boot (Medieval Factions prints `3 factions loaded (5ms)`) is
+   captured as the reference count for that label.
+5. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
+   `extra_data_paths` are copied out, listed (size and sha256) and archived. At least one file
+   must have been captured.
+6. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
+   logs `Enabling <name> v<version>` (equal to `expected_version` when given); no enable
+   failure, no `Could not load` / `UnknownDependencyException`, no `ERROR`/`SEVERE` line naming
+   the plugin and no stack frame inside its package.
+7. **counts-1** — every label the baseline logged is logged by the candidate with the same
+   count. A label that appears on only one side is reported, not failed (plugins change their
+   log lines). Passes with "baseline logged no counts" when there were none.
+8. **files-kept-1** — every file in the fixture still exists: at its path, or — a migration —
+   under the same name inside `plugins/<Name>/`. Size and content may change; a removed file
+   fails. Added files are reported.
+9. **stop-1** — the server stops within two minutes with no error attributable to the candidate.
+10. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
+    the candidate itself wrote.
+
+What it does not prove: anything about data the scenario did not create (an empty scenario
+proves only that the baseline's freshly written defaults load), that a downgrade back to the
+baseline works, or that migrated values are semantically right — only that the files and the
+counts the plugin reports survive.
+
+Dispatch by hand:
+
+```
+gh workflow run save-compat.yml --repo Dans-Plugins/release-gates \
+  -f repository=Dans-Plugins/Medieval-Factions \
+  -f sha=<commit> \
+  -f jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/dev/<jar> \
+  -f baseline_jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/v5.8.1/<jar> \
+  -f config_overrides='factions.allowLeaderlessFactions: true' \
+  -f scenario=$'faction admin create Alpha\nfaction admin create Bravo' \
+  -f extra_data_paths='medieval_factions_db*'
+```
+
 ## Evidence
 
 Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `server.log`
@@ -107,7 +179,11 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
   `{gate, repository, sha, plugin, version, passed, assertions: [{name, passed, detail}]}`
   plus the plugin's data folder.
 - Install gate: `dpm-install-<run id>` —
-  `{gate, dpm, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
+  `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
+- Save-compatibility gate: `save-compat-<run id>` —
+  `{gate, repository, sha, plugin, baselineVersion, version, passed, counts: {label: [baseline, candidate 1, candidate 2]}, fixtureFiles, assertions}`
+  plus `fixture.tar.gz` (what the baseline wrote), `fixture-listing.json` and
+  `candidate-data.tar.gz` (the same paths after the candidate's last boot).
 
 ## Design notes
 
