@@ -21,6 +21,8 @@ assertions (`dpm`, `boot`) are fatal. The gate passes only when every assertion 
 Environment:
   PLUGINS              comma-separated DPM slugs (required)
   DPM_JAR              path to the Dan's Plugin Manager jar to deploy (required)
+  DPM_SOURCE           "input" when DPM_JAR was supplied by the caller, "latest" when it is
+                       the /releases/latest jar (default: latest); recorded only
   JARS_DIR             where installed jars are copied out of the container (default: work/jars)
   RESULT_PATH          where to write result.json (default: result.json)
   OMCSI_API_BASE       default http://localhost:8092
@@ -45,6 +47,7 @@ TOKEN = os.environ["OMCSI_DEPLOY_TOKEN"]
 CONTAINER = os.getenv("OMCSI_CONTAINER_NAME", "open-mc-server")
 PLUGINS = [s.strip() for s in os.environ["PLUGINS"].split(",") if s.strip()]
 DPM_JAR = os.environ["DPM_JAR"]
+DPM_SOURCE = os.getenv("DPM_SOURCE") or "latest"
 JARS_DIR = os.getenv("JARS_DIR", "work/jars")
 RESULT_PATH = os.getenv("RESULT_PATH", "result.json")
 
@@ -53,6 +56,7 @@ _HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 RESULT = {
     "gate": "dpm-install",
     "dpm": os.path.basename(DPM_JAR),
+    "dpmSource": DPM_SOURCE,
     "dpmVersion": None,
     "plugins": [
         {"slug": slug, "name": None, "version": None, "tag": None, "installed": False, "enabled": False}

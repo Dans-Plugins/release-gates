@@ -24,6 +24,11 @@ on:
         required: false
         type: string
         default: "26.2"
+      dpm_jar_url:
+        description: "URL of a Dan's Plugin Manager jar to deploy instead of its /releases/latest one (optional; how the installer itself is verified)"
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       plugins:
@@ -33,6 +38,10 @@ on:
         required: false
         type: string
         default: "26.2"
+      dpm_jar_url:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -66,16 +75,23 @@ jobs:
         run: pip install requests pyyaml
 
       # The manager itself comes from its current *stable* release — the same jar an
-      # operator downloads. `original-*.jar` is the Maven shade plugin's unshaded artifact
-      # and is never the plugin.
-      - name: Download Dan's Plugin Manager (stable)
+      # operator downloads — unless `dpm_jar_url` names a candidate build of the manager
+      # to verify. `original-*.jar` is the Maven shade plugin's unshaded artifact and is
+      # never the plugin.
+      - name: Download Dan's Plugin Manager
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           mkdir -p work/dpm
-          url=$(gh api "repos/Dans-Plugins/Dans-Plugin-Manager/releases/latest" \
-            -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+          if [ -n "${{ inputs.dpm_jar_url }}" ]; then
+            url="${{ inputs.dpm_jar_url }}"
+            source=input
+          else
+            url=$(gh api "repos/Dans-Plugins/Dans-Plugin-Manager/releases/latest" \
+              -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+            source=latest
+          fi
           if [ -z "$url" ] || [ "$url" = "null" ]; then
             echo "::error::Dans-Plugin-Manager has no stable release with a jar asset" >&2
             exit 1
@@ -83,8 +99,9 @@ jobs:
           name=$(basename "$url")
           curl -fsSL -o "work/dpm/$name" "$url"
           unzip -l "work/dpm/$name" plugin.yml >/dev/null
-          echo "Dans-Plugins/Dans-Plugin-Manager -> $name"
+          echo "Dans-Plugins/Dans-Plugin-Manager ($source) -> $name"
           echo "DPM_JAR=$PWD/work/dpm/$name" >> "$GITHUB_ENV"
+          echo "DPM_SOURCE=$source" >> "$GITHUB_ENV"
 
       - name: Configure OMCSI environment
         run: |
@@ -164,7 +181,7 @@ jobs:
               print("## Install gate — no result written (harness did not run)"); raise SystemExit
           r = json.load(open(p))
           print(f"## Install gate — {'PASSED' if r['passed'] else 'FAILED'}")
-          print(f"{r['dpm']} (enabled v{r.get('dpmVersion')})\n")
+          print(f"{r['dpm']} (enabled v{r.get('dpmVersion')}, from {r.get('dpmSource')})\n")
           print("| slug | plugin | version | installed | enabled |\n|---|---|---|---|---|")
           for p in r["plugins"]:
               print(f"| {p['slug']} | {p.get('name') or ''} | {p.get('version') or ''} | {'✅' if p['installed'] else '❌'} | {'✅' if p['enabled'] else '❌'} |")

@@ -1,0 +1,295 @@
+name: Save-compatibility gate
+
+# T2-lite: proves a candidate plugin jar loads the data the current stable release wrote,
+# migrates it, and keeps it across its own restart. The stable jar is booted first (with
+# optional config overrides and console commands to give it something to save), its data
+# folder is captured as a fixture, and the candidate is then booted over that data twice.
+# See gates/save_compat.py for the assertions.
+#
+# Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
+# automation, or a person, dispatches it with the two jar URLs) and `workflow_call` (a
+# plugin repository's own workflow can reuse it). Both record `result.json`, the server
+# log, the fixture and the candidate's data as run artifacts.
+#
+# The OMCSI checkout + Docker image cache is the pattern from boot-gate.yml (lifted from
+# Dans-Plugin-Manager's .github/workflows/integration.yml): on a cache hit the 10–15 minute
+# Spigot build is skipped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Plugin repository (owner/repo) — recorded in the result"
+        required: true
+        type: string
+      sha:
+        description: "Commit the candidate was built from — recorded in the result"
+        required: true
+        type: string
+      jar_url:
+        description: "URL of the candidate jar"
+        required: true
+        type: string
+      baseline_jar_url:
+        description: "URL of the current stable jar whose data the candidate must load"
+        required: true
+        type: string
+      dependencies:
+        description: "Comma-separated owner/repo list whose /releases/latest jar is installed alongside both"
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        description: "Version the candidate must enable with (optional)"
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        description: "Spigot version to boot"
+        required: false
+        type: string
+        default: "26.2"
+      config_overrides:
+        description: "Newline-separated `dotted.key: value` lines applied to plugins/<Name>/config.yml after the baseline's first boot (optional)"
+        required: false
+        type: string
+        default: ""
+      scenario:
+        description: "Newline-separated console commands sent to the baseline after the overrides and a restart (optional)"
+        required: false
+        type: string
+        default: ""
+      extra_data_paths:
+        description: "Newline-separated server-root-relative glob patterns to capture beyond plugins/<Name>/ (optional)"
+        required: false
+        type: string
+        default: ""
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      jar_url:
+        required: true
+        type: string
+      baseline_jar_url:
+        required: true
+        type: string
+      dependencies:
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        required: false
+        type: string
+        default: "26.2"
+      config_overrides:
+        required: false
+        type: string
+        default: ""
+      scenario:
+        required: false
+        type: string
+        default: ""
+      extra_data_paths:
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+concurrency:
+  group: save-compat-${{ inputs.repository }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  save-compat:
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
+
+      - name: Checkout OMCSI
+        uses: actions/checkout@v4
+        with:
+          repository: dmccoystephenson/open-mc-server-infrastructure
+          path: omcsi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Download candidate
+        run: |
+          set -euo pipefail
+          mkdir -p work/candidate
+          name=$(basename "${{ inputs.jar_url }}")
+          curl -fsSL -o "work/candidate/$name" "${{ inputs.jar_url }}"
+          unzip -l "work/candidate/$name" plugin.yml >/dev/null
+          echo "CANDIDATE_JAR=$PWD/work/candidate/$name" >> "$GITHUB_ENV"
+
+      # The baseline is the jar operators run today; its data is what the candidate must load.
+      - name: Download baseline
+        run: |
+          set -euo pipefail
+          mkdir -p work/baseline
+          name=$(basename "${{ inputs.baseline_jar_url }}")
+          curl -fsSL -o "work/baseline/$name" "${{ inputs.baseline_jar_url }}"
+          unzip -l "work/baseline/$name" plugin.yml >/dev/null
+          echo "BASELINE_JAR=$PWD/work/baseline/$name" >> "$GITHUB_ENV"
+
+      # Each dependency is resolved to its current *stable* release — the same
+      # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.
+      # `original-*.jar` is the Maven shade plugin's unshaded artifact and is never the plugin.
+      - name: Resolve dependencies to stable releases
+        if: inputs.dependencies != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/deps
+          IFS=',' read -ra repos <<< "${{ inputs.dependencies }}"
+          paths=""
+          for repo in "${repos[@]}"; do
+            repo=$(echo "$repo" | xargs)
+            [ -z "$repo" ] && continue
+            url=$(gh api "repos/$repo/releases/latest" \
+              -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "::error::$repo has no stable release with a jar asset" >&2
+              exit 1
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/deps/$name" "$url"
+            echo "$repo -> $name"
+            paths="${paths}${PWD}/work/deps/${name}"$'\n'
+          done
+          {
+            echo "DEPENDENCY_JARS<<EOF"
+            printf '%s' "$paths"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure OMCSI environment
+        run: |
+          {
+            echo "MINECRAFT_VERSION=${{ inputs.minecraft_version }}"
+            echo "OPERATOR_UUID=00000000-0000-0000-0000-000000000001"
+            echo "OPERATOR_NAME=CIRunner"
+            echo "OPERATOR_LEVEL=4"
+            echo "ONLINE_MODE=false"
+            echo "OVERWRITE_EXISTING_SERVER=true"
+            echo "SERVER_MOTD=Save-compatibility gate"
+            echo "MAX_PLAYERS=5"
+            echo "DIFFICULTY=peaceful"
+            echo "GAMEMODE=creative"
+            echo "PVP_ENABLED=false"
+            echo "JAVA_OPTS=-Xmx2G -Xms1G"
+            echo "MINECRAFT_AUTO_RESTART=false"
+            echo "DEPLOY_AUTH_TOKEN=save-compat-$GITHUB_RUN_ID"
+            echo "RCON_PASSWORD=save-compat-$GITHUB_RUN_ID"
+            echo "DISCORD_ENABLED=false"
+            echo "DISCORD_WEBHOOK_URL="
+            echo "ALERT_MANAGER_ENABLED=false"
+            echo "AGENT_ENABLED=false"
+          } > omsci.env.tmp
+          mv omsci.env.tmp omcsi/.env
+
+      - name: Cache OMCSI Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/omcsi-images.tar
+          key: omcsi-docker-${{ inputs.minecraft_version }}-${{ hashFiles('omcsi/**/Dockerfile', 'omcsi/compose.yml') }}
+          restore-keys: omcsi-docker-${{ inputs.minecraft_version }}-
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/omcsi-images.tar
+
+      - name: Build OMCSI services
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        working-directory: omcsi
+        env:
+          DOCKER_BUILDKIT: '1'
+          BUILDKIT_PROGRESS: plain
+        run: docker compose build minecraft-wrapper alert-manager
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save open-mc-server open-mc-server-alert-manager > /tmp/omcsi-images.tar
+
+      - name: Start minecraft-wrapper
+        working-directory: omcsi
+        run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
+
+      - name: Run the save-compatibility gate
+        env:
+          OMCSI_API_BASE: http://localhost:8092
+          OMCSI_DEPLOY_TOKEN: save-compat-${{ github.run_id }}
+          REPOSITORY: ${{ inputs.repository }}
+          SHA: ${{ inputs.sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          CONFIG_OVERRIDES: ${{ inputs.config_overrides }}
+          SCENARIO: ${{ inputs.scenario }}
+          EXTRA_DATA_PATHS: ${{ inputs.extra_data_paths }}
+          WORK_DIR: ${{ github.workspace }}/work
+          RESULT_PATH: ${{ github.workspace }}/work/result.json
+        run: python gates/save_compat.py
+
+      - name: Collect server log
+        if: always()
+        run: |
+          mkdir -p work/evidence
+          docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+
+      - name: Summarize
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          p = "work/result.json"
+          if not os.path.exists(p):
+              print("## Save-compatibility gate — no result written (harness did not run)"); raise SystemExit
+          r = json.load(open(p))
+          print(f"## Save-compatibility gate — {'PASSED' if r['passed'] else 'FAILED'}")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}; fixture: {r.get('fixtureFiles')} file(s)\n")
+          if r.get("counts"):
+              print("| loaded | baseline | candidate boot 1 | candidate boot 2 |\n|---|---|---|---|")
+              for label, (b, c1, c2) in r["counts"].items():
+                  print(f"| {label} | {'' if b is None else b} | {'' if c1 is None else c1} | {'' if c2 is None else c2} |")
+              print()
+          print("| assertion | result | detail |\n|---|---|---|")
+          for a in r["assertions"]:
+              print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")
+          EOF
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: save-compat-${{ github.run_id }}
+          path: |
+            work/result.json
+            work/evidence/
+          if-no-files-found: warn
+
+      - name: Tear down OMCSI stack
+        if: always()
+        working-directory: omcsi
+        run: docker compose down
