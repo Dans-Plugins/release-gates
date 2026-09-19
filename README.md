@@ -16,7 +16,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 | [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
 | [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
 | [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides and console commands — migrates it, and keeps every file and every `<n> <label> loaded` count across its own restart | available |
-| `dependents.yml` | Every plugin that depends on the candidate still boots against it | planned |
+| [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
 
 ## Boot gate
 
@@ -171,6 +171,73 @@ gh workflow run save-compat.yml --repo Dans-Plugins/release-gates \
   -f extra_data_paths='medieval_factions_db*'
 ```
 
+## Dependents gate
+
+Proves that the plugins built against the candidate's predecessor still boot on the
+candidate. The candidate, any `dependencies` jars and the current stable release of every
+`dependents` repository are deployed together on one fresh server, which is booted, stopped
+cleanly and booted again. It is the gate for a plugin other plugins `depend:` on — Medieval
+Factions, whose API Currencies, Fiefs, Democracy and the BlueMap integration compile
+against — and it answers the question the boot gate cannot: does the candidate still carry
+what its dependents link to.
+
+Inputs, identical for `workflow_dispatch` and `workflow_call`:
+
+| Input | Required | Meaning |
+|---|---|---|
+| `repository` | yes | `owner/repo` of the plugin — recorded in the result |
+| `sha` | yes | commit the candidate was built from — recorded in the result |
+| `jar_url` | yes | where to download the candidate |
+| `dependents` | yes | comma-separated `owner/repo` list of plugins that depend on the candidate; each one's `/releases/latest` jar is the dependent under test. A repository with no stable release is reported as `skipped: no stable release` and does not fail the gate — there is nothing an operator could be running. A repository that does not exist fails the run |
+| `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list of *other* plugins the dependents need besides the candidate; each one's `/releases/latest` jar is installed alongside. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`). Usually empty |
+| `expected_version` | no | the version the candidate must report when enabling |
+| `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+
+Assertions, in order:
+
+1. **install-<Name>** — the dependent's stable jar carries a readable `plugin.yml`, and
+   every plugin it hard-depends on is on the server: the candidate, a `dependencies` jar or
+   another dependent. A dependent whose other dependency was not supplied is reported as
+   `skipped: dependency [...] not supplied` and not deployed — the candidate did not break
+   it, the caller did not supply it.
+2. **boot-1** — the server reaches `Done` (fatal).
+3. **candidate-enabled-1** — the candidate logs `Enabling <name> v<version>` (equal to
+   `expected_version` when given); no enable failure, no `Could not load`, no
+   `ERROR`/`SEVERE` line naming it and no stack frame inside its package. Fatal: with the
+   candidate down nothing about its dependents can be concluded.
+4. **enable-<Name>-1** — for every installed dependent: it logs `Enabling <Name> v…`; no
+   `Error occurred while enabling <Name>`; no `Could not load 'plugins/<jar>'` /
+   `UnknownDependencyException`; no `ERROR`/`SEVERE` line naming it and no stack frame
+   inside its package. The exception line Bukkit prints after an enable failure
+   (`NoClassDefFoundError`, `NoSuchMethodError`…) is quoted in the detail — it names the
+   symbol the candidate no longer carries.
+5. **stop-1** — the server stops within two minutes with no error attributable to the
+   candidate or any dependent, **and the database closed cleanly**: no `*.trace.db`
+   appeared under the server root and the console has no `zip file closed` /
+   `MVStoreException` / `OnExitDatabaseCloser` line, the same check as the
+   save-compatibility gate.
+6. **boot-2**, **candidate-enabled-2**, **enable-<Name>-2**, **stop-2** — the same, over
+   the data folders the first boot wrote.
+
+The per-dependent assertions run to completion: one dependent that breaks does not hide
+whether the others still boot. The gate passes only when every assertion holds — every
+dependent with a stable release enabled on both boots.
+
+What it does not prove: that a dependent *works* against the candidate beyond enabling
+(a method it calls only from a command can still be gone), or anything about dependents
+that have no stable release.
+
+Dispatch by hand:
+
+```
+gh workflow run dependents.yml --repo Dans-Plugins/release-gates \
+  -f repository=Dans-Plugins/Medieval-Factions \
+  -f sha=<commit> \
+  -f jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/dev/<jar> \
+  -f dependents=Dans-Plugins/Currencies,Dans-Plugins/Fiefs,Dans-Plugins/Democracy,Dans-Plugins/Bluemap_MedievalFactions \
+  -f dependencies=BlueMap-Minecraft/BlueMap#spigot
+```
+
 ## Evidence
 
 Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `server.log`
@@ -185,6 +252,8 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
   `{gate, repository, sha, plugin, baselineVersion, version, passed, counts: {label: [baseline, candidate 1, candidate 2]}, fixtureFiles, assertions}`
   plus `fixture.tar.gz` (what the baseline wrote), `fixture-listing.json` and
   `candidate-data.tar.gz` (the same paths after the candidate's last boot).
+- Dependents gate: `dependents-<run id>` —
+  `{gate, repository, sha, plugin, version, candidateSha256, dependents: [{repository, name, version, tag, jar, installed, enabled_1, enabled_2, skipped}], passed, assertions}`.
 
 ## Design notes
 
