@@ -1,0 +1,298 @@
+name: Dependents gate
+
+# T3: proves that the plugins which `depend:` on a candidate still boot when the candidate
+# replaces the dependency they were built against. The candidate, any extra dependency jars
+# and every dependent's current stable jar are deployed together on one server, which is
+# booted twice with a clean stop in between. See gates/dependents.py for the assertions.
+#
+# Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
+# automation, or a person, dispatches it with the candidate's jar URL and the list of
+# dependent repositories) and `workflow_call` (a plugin repository's own workflow can reuse
+# it). Both record `result.json` and the server log as run artifacts.
+#
+# The OMCSI checkout + Docker image cache is the pattern from boot-gate.yml (lifted from
+# Dans-Plugin-Manager's .github/workflows/integration.yml): on a cache hit the 10–15 minute
+# Spigot build is skipped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Plugin repository (owner/repo) — recorded in the result"
+        required: true
+        type: string
+      sha:
+        description: "Commit the candidate was built from — recorded in the result"
+        required: true
+        type: string
+      jar_url:
+        description: "URL of the candidate jar"
+        required: true
+        type: string
+      dependents:
+        description: "Comma-separated owner/repo list of plugins that depend on the candidate; each one's /releases/latest jar is the dependent under test"
+        required: true
+        type: string
+      dependencies:
+        description: "Comma-separated owner/repo[#asset-substring] list of OTHER plugins the dependents need; each one's /releases/latest jar is installed alongside (optional)"
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        description: "Version the candidate must enable with (optional)"
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        description: "Spigot version to boot"
+        required: false
+        type: string
+        default: "26.2"
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      jar_url:
+        required: true
+        type: string
+      dependents:
+        required: true
+        type: string
+      dependencies:
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        required: false
+        type: string
+        default: "26.2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: dependents-${{ inputs.repository }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  dependents:
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
+
+      - name: Checkout OMCSI
+        uses: actions/checkout@v4
+        with:
+          repository: dmccoystephenson/open-mc-server-infrastructure
+          path: omcsi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Download candidate
+        run: |
+          set -euo pipefail
+          mkdir -p work/candidate
+          name=$(basename "${{ inputs.jar_url }}")
+          curl -fsSL -o "work/candidate/$name" "${{ inputs.jar_url }}"
+          unzip -l "work/candidate/$name" plugin.yml >/dev/null
+          echo "CANDIDATE_JAR=$PWD/work/candidate/$name" >> "$GITHUB_ENV"
+
+      # Each extra dependency is resolved to its current *stable* release — the same
+      # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.
+      # `original-*.jar` is the Maven shade plugin's unshaded artifact and is never the plugin.
+      # A release that carries one jar per platform (BlueMap ships -spigot, -paper, -fabric…)
+      # is narrowed with `owner/repo#substring`, e.g. `BlueMap-Minecraft/BlueMap#spigot`.
+      - name: Resolve dependencies to stable releases
+        if: inputs.dependencies != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/deps
+          IFS=',' read -ra entries <<< "${{ inputs.dependencies }}"
+          paths=""
+          for entry in "${entries[@]}"; do
+            entry=$(echo "$entry" | xargs)
+            [ -z "$entry" ] && continue
+            repo=${entry%%#*}
+            sub=""
+            [ "$entry" != "$repo" ] && sub=${entry#*#}
+            url=$(gh api "repos/$repo/releases/latest" | jq -r --arg sub "$sub" \
+              '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not) | select(.name | contains($sub))][0].browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "::error::$repo has no stable release with a jar asset${sub:+ containing '$sub'}" >&2
+              exit 1
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/deps/$name" "$url"
+            echo "$entry -> $name"
+            paths="${paths}${PWD}/work/deps/${name}"$'\n'
+          done
+          {
+            echo "DEPENDENCY_JARS<<EOF"
+            printf '%s' "$paths"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      # Each dependent is the plugin an operator runs today: its /releases/latest jar. A
+      # repository with no stable release has nothing an operator could be running against
+      # the candidate, so it is recorded as skipped rather than failed; a repository that
+      # does not exist is a typo and fails the run.
+      - name: Resolve dependents to stable releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/dependents
+          : > work/dependents.jsonl
+          IFS=',' read -ra repos <<< "${{ inputs.dependents }}"
+          for repo in "${repos[@]}"; do
+            repo=$(echo "$repo" | xargs)
+            [ -z "$repo" ] && continue
+            gh api "repos/$repo" -q .full_name >/dev/null
+            if ! release=$(gh api "repos/$repo/releases/latest" 2>/dev/null); then
+              echo "$repo -> no stable release (skipped)"
+              jq -nc --arg r "$repo" '{repository: $r, tag: null, jar: null, reason: "no stable release"}' >> work/dependents.jsonl
+              continue
+            fi
+            tag=$(jq -r .tag_name <<< "$release")
+            url=$(jq -r '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url' <<< "$release")
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "$repo -> $tag has no jar asset (skipped)"
+              jq -nc --arg r "$repo" --arg t "$tag" '{repository: $r, tag: $t, jar: null, reason: ("stable release " + $t + " has no jar asset")}' >> work/dependents.jsonl
+              continue
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/dependents/$name" "$url"
+            echo "$repo -> $name ($tag)"
+            jq -nc --arg r "$repo" --arg t "$tag" --arg j "$PWD/work/dependents/$name" '{repository: $r, tag: $t, jar: $j, reason: null}' >> work/dependents.jsonl
+          done
+          jq -s . work/dependents.jsonl > work/dependents.json
+          cat work/dependents.json
+
+      - name: Configure OMCSI environment
+        run: |
+          {
+            echo "MINECRAFT_VERSION=${{ inputs.minecraft_version }}"
+            echo "OPERATOR_UUID=00000000-0000-0000-0000-000000000001"
+            echo "OPERATOR_NAME=CIRunner"
+            echo "OPERATOR_LEVEL=4"
+            echo "ONLINE_MODE=false"
+            echo "OVERWRITE_EXISTING_SERVER=true"
+            echo "SERVER_MOTD=Dependents gate"
+            echo "MAX_PLAYERS=5"
+            echo "DIFFICULTY=peaceful"
+            echo "GAMEMODE=creative"
+            echo "PVP_ENABLED=false"
+            echo "JAVA_OPTS=-Xmx2G -Xms1G"
+            echo "MINECRAFT_AUTO_RESTART=false"
+            echo "DEPLOY_AUTH_TOKEN=dependents-$GITHUB_RUN_ID"
+            echo "RCON_PASSWORD=dependents-$GITHUB_RUN_ID"
+            echo "DISCORD_ENABLED=false"
+            echo "DISCORD_WEBHOOK_URL="
+            echo "ALERT_MANAGER_ENABLED=false"
+            echo "AGENT_ENABLED=false"
+          } > omsci.env.tmp
+          mv omsci.env.tmp omcsi/.env
+
+      - name: Cache OMCSI Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/omcsi-images.tar
+          key: omcsi-docker-${{ inputs.minecraft_version }}-${{ hashFiles('omcsi/**/Dockerfile', 'omcsi/compose.yml') }}
+          restore-keys: omcsi-docker-${{ inputs.minecraft_version }}-
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/omcsi-images.tar
+
+      - name: Build OMCSI services
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        working-directory: omcsi
+        env:
+          DOCKER_BUILDKIT: '1'
+          BUILDKIT_PROGRESS: plain
+        run: docker compose build minecraft-wrapper alert-manager
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save open-mc-server open-mc-server-alert-manager > /tmp/omcsi-images.tar
+
+      - name: Start minecraft-wrapper
+        working-directory: omcsi
+        run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
+
+      - name: Run the dependents gate
+        env:
+          OMCSI_API_BASE: http://localhost:8092
+          OMCSI_DEPLOY_TOKEN: dependents-${{ github.run_id }}
+          REPOSITORY: ${{ inputs.repository }}
+          SHA: ${{ inputs.sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          DEPENDENTS_MANIFEST: ${{ github.workspace }}/work/dependents.json
+          RESULT_PATH: ${{ github.workspace }}/work/result.json
+        run: python gates/dependents.py
+
+      - name: Collect server log
+        if: always()
+        run: |
+          mkdir -p work/evidence
+          docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+
+      - name: Summarize
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          p = "work/result.json"
+          if not os.path.exists(p):
+              print("## Dependents gate — no result written (harness did not run)"); raise SystemExit
+          r = json.load(open(p))
+          print(f"## Dependents gate — {'PASSED' if r['passed'] else 'FAILED'}")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('version')}\n")
+          print("| dependent | plugin | version | installed | enabled (boot 1) | enabled (boot 2) | skipped |\n|---|---|---|---|---|---|---|")
+          yn = lambda b: '✅' if b else '❌'
+          for d in r["dependents"]:
+              if d.get("skipped"):
+                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | — | — | — | {d['skipped']} |")
+              else:
+                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | {yn(d['installed'])} | {yn(d['enabled_1'])} | {yn(d['enabled_2'])} | |")
+          print()
+          print("| assertion | result | detail |\n|---|---|---|")
+          for a in r["assertions"]:
+              print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")
+          EOF
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependents-${{ github.run_id }}
+          path: |
+            work/result.json
+            work/evidence/
+          if-no-files-found: warn
+
+      - name: Tear down OMCSI stack
+        if: always()
+        working-directory: omcsi
+        run: docker compose down
