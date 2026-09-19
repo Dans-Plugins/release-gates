@@ -439,16 +439,36 @@ def check_files_kept(n, fixture, data_paths, plugin_name):
     record(f"files-kept-{n}", True, detail)
 
 
+# An embedded database that fails to close on shutdown leaves its own evidence: H2 writes
+# `<db>.trace.db` when a close throws, and the console carries the classloader/MVStore
+# failure. Neither is a normal part of a clean stop, and each one is a slow, silent path to
+# a corrupt store — so either blocks, no matter how the boot itself looked.
+DB_CLOSE_FAILURE = re.compile(r"zip file closed|MVStoreException|OnExitDatabaseCloser|File corrupted while reading record")
+
+
+def db_close_evidence(log):
+    hits = [line.strip() for line in log.splitlines() if DB_CLOSE_FAILURE.search(line)]
+    traces = []
+    for pattern in ("*.trace.db", "plugins/*/*.trace.db", "*/*.trace.db"):
+        traces += expand_globs([pattern])
+    return hits, sorted(set(traces))
+
+
 def stop(n, plugin_name, package_prefix):
     cursor = now_cursor()
     stopped = stop_server(f"stop {n}")
     if not stopped:
         record(f"stop-{n}", False, "server still running 120s after stop")
     time.sleep(2)
-    errors = attributable_errors(logs_since(cursor), plugin_name, package_prefix)
+    log = logs_since(cursor)
+    errors = attributable_errors(log, plugin_name, package_prefix)
     if errors:
         record(f"stop-{n}", False, "; ".join(errors[:5]))
-    record(f"stop-{n}", True, "clean stop")
+    close_lines, trace_files = db_close_evidence(log)
+    if close_lines or trace_files:
+        record(f"stop-{n}", False,
+               "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
+    record(f"stop-{n}", True, "clean stop; no database close failure, no *.trace.db")
 
 
 # --- main --------------------------------------------------------------------------------

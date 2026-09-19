@@ -148,7 +148,7 @@ Assertions, in order — the run stops at the first failure:
 8. **files-kept-1** — every file in the fixture still exists: at its path, or — a migration —
    under the same name inside `plugins/<Name>/`. Size and content may change; a removed file
    fails. Added files are reported.
-9. **stop-1** — the server stops within two minutes with no error attributable to the candidate.
+9. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` appeared anywhere under the server root and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
 10. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
     the candidate itself wrote.
 
