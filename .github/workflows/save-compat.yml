@@ -6,6 +6,12 @@ name: Save-compatibility gate
 # folder is captured as a fixture, and the candidate is then booted over that data twice.
 # See gates/save_compat.py for the assertions.
 #
+# With `fixture_url` nothing is recorded: the fixture (a plugin-fixtures release asset,
+# with its `manifest.json` beside it) is unpacked into the server root before the
+# baseline's first boot, the baseline is booted over it — proving the fixture loads on the
+# stable and fixing the reference counts, which must also equal the manifest's `expected`
+# — and the candidate follows exactly as otherwise.
+#
 # Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
 # automation, or a person, dispatches it with the two jar URLs) and `workflow_call` (a
 # plugin repository's own workflow can reuse it). Both record `result.json`, the server
@@ -64,6 +70,27 @@ on:
         required: false
         type: string
         default: ""
+      fixture_url:
+        description: "URL of a fixture tar.gz (a plugin-fixtures release asset) to boot the baseline over instead of recording one (optional)"
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
+        description: "URL of that fixture's manifest.json; defaults to manifest.json beside the archive, as every plugin-fixtures release carries it"
+        required: false
+        type: string
+        default: ""
+      restart_cycles:
+        description: "Stop/start cycles of the candidate after its first boot (each with the full stop, counts and files-kept checks)"
+        required: false
+        type: string
+        default: "1"
+      backend:
+        description: "Store the plugin is run on: h2 (embedded default), mariadb or postgres (a database container beside the server), json (the plugin's JSON store, with a migration round trip)"
+        required: false
+        type: choice
+        options: [h2, mariadb, postgres, json]
+        default: h2
   workflow_call:
     inputs:
       repository:
@@ -102,19 +129,35 @@ on:
         required: false
         type: string
         default: ""
+      fixture_url:
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
+        required: false
+        type: string
+        default: ""
+      restart_cycles:
+        required: false
+        type: string
+        default: "1"
+      backend:
+        required: false
+        type: string
+        default: h2
 
 permissions:
   contents: read
 
 concurrency:
-  group: save-compat-${{ inputs.repository }}-${{ inputs.sha }}
+  group: save-compat-${{ inputs.repository }}-${{ inputs.sha }}-${{ inputs.backend || 'h2' }}
   cancel-in-progress: false
 
 jobs:
   save-compat:
-    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }} (${{ inputs.backend || 'h2' }})
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
 
     steps:
       - name: Checkout gates
@@ -152,6 +195,27 @@ jobs:
           curl -fsSL -o "work/baseline/$name" "${{ inputs.baseline_jar_url }}"
           unzip -l "work/baseline/$name" plugin.yml >/dev/null
           echo "BASELINE_JAR=$PWD/work/baseline/$name" >> "$GITHUB_ENV"
+
+      # A supplied fixture replaces the recording: the archive and the manifest.json published
+      # beside it (the plugin-fixtures convention: every fixture release carries both).
+      - name: Download fixture
+        if: inputs.fixture_url != ''
+        run: |
+          set -euo pipefail
+          mkdir -p work/fixture-input
+          url="${{ inputs.fixture_url }}"
+          manifest_url="${{ inputs.fixture_manifest_url }}"
+          manifest_url="${manifest_url:-${url%/*}/manifest.json}"
+          curl -fsSL -o work/fixture-input/fixture.tar.gz "$url"
+          tar tzf work/fixture-input/fixture.tar.gz >/dev/null
+          curl -fsSL -o work/fixture-input/manifest.json "$manifest_url"
+          python -c 'import json; m = json.load(open("work/fixture-input/manifest.json")); print(m["plugin"], m["version"], m.get("kind", "recorded"), "expected:", m.get("expected"))'
+          {
+            echo "FIXTURE_ARCHIVE=$PWD/work/fixture-input/fixture.tar.gz"
+            echo "FIXTURE_MANIFEST=$PWD/work/fixture-input/manifest.json"
+            echo "FIXTURE_URL=$url"
+            echo "FIXTURE_MANIFEST_URL=$manifest_url"
+          } >> "$GITHUB_ENV"
 
       # Each dependency is resolved to its current *stable* release — the same
       # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.
@@ -238,6 +302,38 @@ jobs:
         working-directory: omcsi
         run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
 
+      # A database backend is a container on the server's compose network, up and accepting
+      # connections before any plugin jar is deployed, and kept for the whole run: baseline
+      # and candidate share one database, so the candidate migrates the very schema the
+      # stable release created. The credentials are throwaway — the container lives only
+      # inside this job. Torn down with the stack.
+      - name: Start database backend
+        if: inputs.backend == 'mariadb' || inputs.backend == 'postgres'
+        run: |
+          set -euo pipefail
+          net=$(docker inspect open-mc-server --format '{{range $k, $_ := .NetworkSettings.Networks}}{{$k}}{{"\n"}}{{end}}' | head -n1)
+          echo "server network: $net"
+          case "${{ inputs.backend }}" in
+            mariadb)
+              docker run -d --name mfdb --network "$net" \
+                -e MARIADB_ROOT_PASSWORD=save-compat-root -e MARIADB_DATABASE=mf \
+                -e MARIADB_USER=mf -e MARIADB_PASSWORD=save-compat mariadb:11
+              ready() { docker exec mfdb mariadb -umf -psave-compat -h 127.0.0.1 -e 'select 1' mf >/dev/null 2>&1; }
+              ;;
+            postgres)
+              docker run -d --name mfdb --network "$net" \
+                -e POSTGRES_USER=mf -e POSTGRES_PASSWORD=save-compat -e POSTGRES_DB=mf postgres:16
+              ready() { docker exec mfdb pg_isready -U mf -d mf >/dev/null 2>&1; }
+              ;;
+          esac
+          for i in $(seq 1 60); do
+            if ready; then echo "mfdb ready after ${i} poll(s)"; exit 0; fi
+            sleep 2
+          done
+          echo "::error::mfdb (${{ inputs.backend }}) did not accept connections within 120s" >&2
+          docker logs mfdb >&2 || true
+          exit 1
+
       - name: Run the save-compatibility gate
         env:
           OMCSI_API_BASE: http://localhost:8092
@@ -248,6 +344,15 @@ jobs:
           CONFIG_OVERRIDES: ${{ inputs.config_overrides }}
           SCENARIO: ${{ inputs.scenario }}
           EXTRA_DATA_PATHS: ${{ inputs.extra_data_paths }}
+          # FIXTURE_ARCHIVE / FIXTURE_MANIFEST / FIXTURE_URL / FIXTURE_MANIFEST_URL come from
+          # the Download fixture step's GITHUB_ENV when fixture_url was given.
+          RESTART_CYCLES: ${{ inputs.restart_cycles || '1' }}
+          BACKEND: ${{ inputs.backend || 'h2' }}
+          DB_CONTAINER: mfdb
+          DB_HOST: mfdb
+          DB_NAME: mf
+          DB_USER: mf
+          DB_PASSWORD: save-compat
           WORK_DIR: ${{ github.workspace }}/work
           RESULT_PATH: ${{ github.workspace }}/work/result.json
         run: python gates/save_compat.py
@@ -257,6 +362,7 @@ jobs:
         run: |
           mkdir -p work/evidence
           docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+          if docker inspect mfdb >/dev/null 2>&1; then docker logs mfdb > work/evidence/db.log 2>&1 || true; fi
 
       - name: Summarize
         if: always()
@@ -268,11 +374,29 @@ jobs:
               print("## Save-compatibility gate — no result written (harness did not run)"); raise SystemExit
           r = json.load(open(p))
           print(f"## Save-compatibility gate — {'PASSED' if r['passed'] else 'FAILED'}")
-          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}; fixture: {r.get('fixtureFiles')} file(s)\n")
-          if r.get("counts"):
-              print("| loaded | baseline | candidate boot 1 | candidate boot 2 |\n|---|---|---|---|")
-              for label, (b, c1, c2) in r["counts"].items():
-                  print(f"| {label} | {'' if b is None else b} | {'' if c1 is None else c1} | {'' if c2 is None else c2} |")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}; backend: {r.get('backend', 'h2')}; restart cycles: {r.get('restartCycles', 1)}; fixture: {r.get('fixtureFiles')} file(s)\n")
+          fx = r.get("fixture")
+          if fx:
+              print(f"Supplied fixture: {fx.get('plugin')} {fx.get('version')} ({fx.get('kind')}) from {fx.get('url')} — sha256 `{fx.get('sha256')}`\n")
+          expected = (fx or {}).get("expected") or {}
+          boots = r.get("restartCycles", 1) + 1
+          counts = r.get("counts", {})
+          if counts or expected:
+              labels = list(counts) + [l for l in expected if l not in counts]
+              print("| loaded | " + ("manifest expected | " if expected else "") + "baseline | " + " | ".join(f"candidate boot {k}" for k in range(1, boots + 1)) + " |")
+              print("|---|" + ("---|" if expected else "") + "---|" + "---|" * boots)
+              for label in labels:
+                  cols = list(counts.get(label, [])) + [None] * (boots + 1)
+                  row = f"| {label} | "
+                  if expected:
+                      row += f"{'' if label not in expected else expected[label]} | "
+                  print(row + " | ".join('' if c is None else str(c) for c in cols[:boots + 1]) + " |")
+              print()
+          if r.get("migrationRoundtrip"):
+              print(f"Migration round trip from `{r['migrationRoundtrip']['start']}`:\n")
+              print("| leg | migration | restart on target |\n|---|---|---|")
+              for leg in r["migrationRoundtrip"]["legs"]:
+                  print(f"| {leg['from']} → {leg['to']} | {leg.get('migration', '')} | {leg.get('countsDetail', '')} |")
               print()
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:
@@ -292,4 +416,6 @@ jobs:
       - name: Tear down OMCSI stack
         if: always()
         working-directory: omcsi
-        run: docker compose down
+        run: |
+          docker rm -f mfdb >/dev/null 2>&1 || true
+          docker compose down

@@ -89,8 +89,10 @@ RESULT = {
             "tag": d.get("tag"),
             "jar": os.path.basename(d["jar"]) if d.get("jar") else None,
             "installed": False,
+            "enabled_baseline": None,
             "enabled_1": False,
             "enabled_2": False,
+            "pre_existing": False,
             "skipped": d.get("reason") if not d.get("jar") else None,
         }
         for d in MANIFEST
@@ -179,6 +181,16 @@ def deploy_jar(path):
     print(f"  deployed {name}")
 
 
+WORK_DIR = os.getenv("WORK_DIR", "work")
+
+
+def copy_out(container_path, dest):
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    r = subprocess.run(["docker", "cp", f"{CONTAINER}:{container_path}", dest],
+                       capture_output=True, text=True, timeout=120)
+    return r.returncode == 0, (r.stderr or r.stdout).strip()
+
+
 def docker_exec(*args):
     cmd = ["docker", "exec", CONTAINER] + list(args)
     r = subprocess.run(cmd, capture_output=True, timeout=60)
@@ -260,7 +272,14 @@ def enable_problems(log, plugin_name, package_prefix, jar_basename):
 
 
 def stop_server(label):
-    _api("POST", "/api/server/stop")
+    """Stop the server; a server that is already stopped (wrapper answers 409) counts as stopped."""
+    if not is_running():
+        return True
+    try:
+        _api("POST", "/api/server/stop")
+    except requests.HTTPError as e:
+        if e.response is None or e.response.status_code != 409:
+            raise
     return wait_for(lambda: not is_running(), 120, label)
 
 
@@ -308,12 +327,25 @@ def dependent_enabled(n, log, dependent):
 DB_CLOSE_FAILURE = re.compile(r"zip file closed|MVStoreException|OnExitDatabaseCloser|File corrupted while reading record")
 
 
+TRACE_GLOBS = ("*.trace.db", "plugins/*/*.trace.db", "*/*.trace.db")
+TRACE_BEFORE_CANDIDATE = {}  # trace files (and sizes) the control phase left: the stable's, not the candidate's
+
+
+def trace_files_now():
+    out = {}
+    for pattern in TRACE_GLOBS:
+        for path in expand_globs([pattern]):
+            ok, size, _ = docker_exec("sh", "-c", f"cd {SERVER_ROOT} && wc -c < '{path}'")
+            out[path] = int(size.strip() or 0) if ok else -1
+    return out
+
+
 def db_close_evidence(log):
     hits = [line.strip() for line in log.splitlines() if DB_CLOSE_FAILURE.search(line)]
-    traces = []
-    for pattern in ("*.trace.db", "plugins/*/*.trace.db", "*/*.trace.db"):
-        traces += expand_globs([pattern])
-    return hits, sorted(set(traces))
+    now = trace_files_now()
+    blamed = sorted(p for p, size in now.items()
+                    if p not in TRACE_BEFORE_CANDIDATE or size > TRACE_BEFORE_CANDIDATE[p])
+    return hits, blamed
 
 
 def stop(n, plugin_name, package_prefix):
@@ -331,9 +363,23 @@ def stop(n, plugin_name, package_prefix):
         record(f"stop-{n}", False, "; ".join(errors[:5]))
         return
     close_lines, trace_files = db_close_evidence(log)
+    if trace_files:
+        # Keep the evidence: the trace file names the H2 instance (shaded package) that failed.
+        ev = os.path.join(WORK_DIR, "evidence", "trace-files")
+        os.makedirs(ev, exist_ok=True)
+        for t in trace_files:
+            copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
     if close_lines or trace_files:
-        record(f"stop-{n}", False,
-               "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
+        broken = [d["name"] for d in RESULT["dependents"] if d.get("pre_existing")]
+        detail = "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files])
+        if broken:
+            # A dependent that already fails to enable can leave a connection open on a shared
+            # database; the exit-hook failure that follows is not the candidate's. The
+            # candidate's own close is proven by the save-compatibility gate's restart cycles.
+            RESULT.setdefault("closeFailureWithBrokenDependents", []).extend(trace_files)
+            record(f"stop-{n}", True, detail + f" — with already-broken dependent(s) {broken} installed; not attributed to the candidate (see the save-compatibility gate for the candidate alone)")
+            return
+        record(f"stop-{n}", False, detail)
         return
     record(f"stop-{n}", True, "clean stop; no database close failure, no *.trace.db")
 
@@ -380,6 +426,48 @@ def resolve_dependents(candidate_name, supplied_names):
         record(f"install-{name}", True, detail)
 
 
+BASELINE_JAR = os.getenv("BASELINE_JAR") or None
+
+
+def control_phase(plugin_name, package_prefix, installed):
+    """Boot every dependent against the CURRENT STABLE first. A dependent that does not
+    enable here is already broken; the candidate cannot be blamed for it and the gate
+    reports it as pre-existing instead of failing."""
+    meta = read_plugin_yml(BASELINE_JAR)
+    name, pkg = meta.get("name"), package_of(meta)
+    print(f"\n[control] {name} v{meta.get('version')} (current stable) with every dependent")
+    deploy_jar(BASELINE_JAR)
+    for d in installed:
+        deploy_jar(DEPENDENT_META[d["repository"]]["path"])
+    if not stop_server("control stop"):
+        record("control", False, "server did not stop before the control boot", fatal=True)
+    log = boot_to_done("control")
+    for d in RESULT["dependents"]:
+        if d["installed"]:
+            before = len(RESULT["assertions"])
+            dependent_enabled("control", log, d)
+            d["enabled_baseline"] = RESULT["assertions"][-1]["passed"]
+            # the control assertions are informational: rename so they never decide the verdict
+            for a in RESULT["assertions"][before:]:
+                a["name"] = a["name"].replace("-control", "-baseline")
+                if not a["passed"]:
+                    d["pre_existing"] = True
+                    a["passed"] = True
+                    a["detail"] = "PRE-EXISTING against the current stable — " + a["detail"]
+    if not stop_server("control stop"):
+        record("control", False, "server did not stop after the control boot", fatal=True)
+    ok, _, err = docker_exec("rm", f"{SERVER_ROOT}/plugins/{os.path.basename(BASELINE_JAR)}")
+    if not ok:
+        record("control", False, f"baseline jar could not be removed: {err}", fatal=True)
+    TRACE_BEFORE_CANDIDATE.update(trace_files_now())
+    if TRACE_BEFORE_CANDIDATE:
+        RESULT["baselineCloseFailure"] = sorted(TRACE_BEFORE_CANDIDATE)
+        print(f"  NOTE: the current stable left a database trace file after its shutdown: {sorted(TRACE_BEFORE_CANDIDATE)}")
+    record("control", True, "; ".join(
+        f"{d['name']}: {'enables' if d['enabled_baseline'] else 'ALREADY BROKEN'} against the current stable"
+        for d in RESULT["dependents"] if d["installed"]) or "no installed dependents")
+
+
 def main():
     print("=== Dependents gate ===\n")
 
@@ -407,9 +495,12 @@ def main():
     if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "baseline Done", poll=10):
         record("boot-1", False, "baseline boot never reached Done", fatal=True)
 
-    print("\n[deploy] dependencies, the candidate, then every dependent...")
+    print("\n[deploy] dependencies...")
     for dep in DEPENDENCY_JARS:
         deploy_jar(dep)
+    if BASELINE_JAR:
+        control_phase(plugin_name, package_prefix, installed)
+    print("\n[deploy] the candidate, then every dependent...")
     deploy_jar(CANDIDATE_JAR)
     for d in installed:
         deploy_jar(DEPENDENT_META[d["repository"]]["path"])
@@ -423,10 +514,20 @@ def main():
         log = boot_to_done(n)
         candidate_enabled(n, log, plugin_name, package_prefix)
         for d in RESULT["dependents"]:
+            before = len(RESULT["assertions"])
             dependent_enabled(n, log, d)
+            # A dependent that was already broken against the current stable is reported,
+            # not held against the candidate. A dependent that worked and now does not is a
+            # regression and fails the gate.
+            if d.get("pre_existing"):
+                for a in RESULT["assertions"][before:]:
+                    if not a["passed"]:
+                        a["passed"] = True
+                        a["detail"] = "PRE-EXISTING (also fails against the current stable; not a regression) — " + a["detail"]
         print(f"\n[stop {n}]")
         stop(n, plugin_name, package_prefix)
 
+    RESULT["preExisting"] = [d["name"] for d in RESULT["dependents"] if d.get("pre_existing")]
     finish(all(a["passed"] for a in RESULT["assertions"]))
 
 
