@@ -1,0 +1,241 @@
+name: Boot gate
+
+# T1: boots a candidate plugin jar on a real Spigot server (OMCSI in Docker), twice, and
+# fails on the first assertion that does not hold. See gates/boot_gate.py for the list.
+#
+# Callable two ways with the same inputs: `workflow_dispatch` (the release automation, or a
+# person, dispatches it with a jar URL) and `workflow_call` (a plugin repository's own
+# workflow can reuse it). Both record `result.json` and the server log as run artifacts.
+#
+# The OMCSI checkout + Docker image cache is lifted from Dans-Plugin-Manager's
+# .github/workflows/integration.yml: on a cache hit the 10–15 minute Spigot build is skipped.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Plugin repository (owner/repo) — recorded in the result"
+        required: true
+        type: string
+      sha:
+        description: "Commit the candidate was built from — recorded in the result"
+        required: true
+        type: string
+      jar_url:
+        description: "URL of the candidate jar"
+        required: true
+        type: string
+      dependencies:
+        description: "Comma-separated owner/repo list whose /releases/latest jar is installed alongside the candidate"
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        description: "Version the candidate must enable with (optional)"
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        description: "Spigot version to boot"
+        required: false
+        type: string
+        default: "26.2"
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      jar_url:
+        required: true
+        type: string
+      dependencies:
+        required: false
+        type: string
+        default: ""
+      expected_version:
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        required: false
+        type: string
+        default: "26.2"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: boot-gate-${{ inputs.repository }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  boot:
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
+
+      - name: Checkout OMCSI
+        uses: actions/checkout@v4
+        with:
+          repository: dmccoystephenson/open-mc-server-infrastructure
+          path: omcsi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Download candidate
+        run: |
+          set -euo pipefail
+          mkdir -p work/candidate
+          name=$(basename "${{ inputs.jar_url }}")
+          curl -fsSL -o "work/candidate/$name" "${{ inputs.jar_url }}"
+          unzip -l "work/candidate/$name" plugin.yml >/dev/null
+          echo "CANDIDATE_JAR=$PWD/work/candidate/$name" >> "$GITHUB_ENV"
+
+      # Each dependency is resolved to its current *stable* release — the same
+      # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.
+      # `original-*.jar` is the Maven shade plugin's unshaded artifact and is never the plugin.
+      - name: Resolve dependencies to stable releases
+        if: inputs.dependencies != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/deps
+          IFS=',' read -ra repos <<< "${{ inputs.dependencies }}"
+          paths=""
+          for repo in "${repos[@]}"; do
+            repo=$(echo "$repo" | xargs)
+            [ -z "$repo" ] && continue
+            url=$(gh api "repos/$repo/releases/latest" \
+              -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "::error::$repo has no stable release with a jar asset" >&2
+              exit 1
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/deps/$name" "$url"
+            echo "$repo -> $name"
+            paths="${paths}${PWD}/work/deps/${name}"$'\n'
+          done
+          {
+            echo "DEPENDENCY_JARS<<EOF"
+            printf '%s' "$paths"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure OMCSI environment
+        run: |
+          {
+            echo "MINECRAFT_VERSION=${{ inputs.minecraft_version }}"
+            echo "OPERATOR_UUID=00000000-0000-0000-0000-000000000001"
+            echo "OPERATOR_NAME=CIRunner"
+            echo "OPERATOR_LEVEL=4"
+            echo "ONLINE_MODE=false"
+            echo "OVERWRITE_EXISTING_SERVER=true"
+            echo "SERVER_MOTD=Boot gate"
+            echo "MAX_PLAYERS=5"
+            echo "DIFFICULTY=peaceful"
+            echo "GAMEMODE=creative"
+            echo "PVP_ENABLED=false"
+            echo "JAVA_OPTS=-Xmx2G -Xms1G"
+            echo "MINECRAFT_AUTO_RESTART=false"
+            echo "DEPLOY_AUTH_TOKEN=boot-gate-$GITHUB_RUN_ID"
+            echo "RCON_PASSWORD=boot-gate-$GITHUB_RUN_ID"
+            echo "DISCORD_ENABLED=false"
+            echo "DISCORD_WEBHOOK_URL="
+            echo "ALERT_MANAGER_ENABLED=false"
+            echo "AGENT_ENABLED=false"
+          } > omsci.env.tmp
+          mv omsci.env.tmp omcsi/.env
+
+      - name: Cache OMCSI Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/omcsi-images.tar
+          key: omcsi-docker-${{ inputs.minecraft_version }}-${{ hashFiles('omcsi/**/Dockerfile', 'omcsi/compose.yml') }}
+          restore-keys: omcsi-docker-${{ inputs.minecraft_version }}-
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/omcsi-images.tar
+
+      - name: Build OMCSI services
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        working-directory: omcsi
+        env:
+          DOCKER_BUILDKIT: '1'
+          BUILDKIT_PROGRESS: plain
+        run: docker compose build minecraft-wrapper alert-manager
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save open-mc-server open-mc-server-alert-manager > /tmp/omcsi-images.tar
+
+      - name: Start minecraft-wrapper
+        working-directory: omcsi
+        run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
+
+      - name: Run the boot gate
+        env:
+          OMCSI_API_BASE: http://localhost:8092
+          OMCSI_DEPLOY_TOKEN: boot-gate-${{ github.run_id }}
+          REPOSITORY: ${{ inputs.repository }}
+          SHA: ${{ inputs.sha }}
+          EXPECTED_VERSION: ${{ inputs.expected_version }}
+          RESULT_PATH: ${{ github.workspace }}/work/result.json
+        run: python gates/boot_gate.py
+
+      - name: Collect server log and data folder
+        if: always()
+        run: |
+          mkdir -p work/evidence
+          docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+          plugin=$(python -c 'import json,sys; print(json.load(open("work/result.json")).get("plugin") or "")' 2>/dev/null || true)
+          if [ -n "$plugin" ]; then
+            docker cp "open-mc-server:/mcserver/plugins/$plugin" work/evidence/data-folder 2>/dev/null || true
+          fi
+
+      - name: Summarize
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          p = "work/result.json"
+          if not os.path.exists(p):
+              print("## Boot gate — no result written (harness did not run)"); raise SystemExit
+          r = json.load(open(p))
+          print(f"## Boot gate — {'PASSED' if r['passed'] else 'FAILED'}")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('version')}\n")
+          print("| assertion | result | detail |\n|---|---|---|")
+          for a in r["assertions"]:
+              print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")
+          EOF
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: boot-gate-${{ github.run_id }}
+          path: |
+            work/result.json
+            work/evidence/
+          if-no-files-found: warn
+
+      - name: Tear down OMCSI stack
+        if: always()
+        working-directory: omcsi
+        run: docker compose down
