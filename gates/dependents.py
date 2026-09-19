@@ -181,6 +181,16 @@ def deploy_jar(path):
     print(f"  deployed {name}")
 
 
+WORK_DIR = os.getenv("WORK_DIR", "work")
+
+
+def copy_out(container_path, dest):
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    r = subprocess.run(["docker", "cp", f"{CONTAINER}:{container_path}", dest],
+                       capture_output=True, text=True, timeout=120)
+    return r.returncode == 0, (r.stderr or r.stdout).strip()
+
+
 def docker_exec(*args):
     cmd = ["docker", "exec", CONTAINER] + list(args)
     r = subprocess.run(cmd, capture_output=True, timeout=60)
@@ -353,6 +363,12 @@ def stop(n, plugin_name, package_prefix):
         record(f"stop-{n}", False, "; ".join(errors[:5]))
         return
     close_lines, trace_files = db_close_evidence(log)
+    if trace_files:
+        # Keep the evidence: the trace file names the H2 instance (shaded package) that failed.
+        ev = os.path.join(WORK_DIR, "evidence", "trace-files")
+        os.makedirs(ev, exist_ok=True)
+        for t in trace_files:
+            copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
     if close_lines or trace_files:
         record(f"stop-{n}", False,
                "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))

@@ -266,6 +266,7 @@ jobs:
           EXPECTED_VERSION: ${{ inputs.expected_version }}
           DEPENDENTS_MANIFEST: ${{ github.workspace }}/work/dependents.json
           RESULT_PATH: ${{ github.workspace }}/work/result.json
+          WORK_DIR: ${{ github.workspace }}/work
         run: python gates/dependents.py
 
       - name: Collect server log

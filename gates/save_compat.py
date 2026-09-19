@@ -495,6 +495,12 @@ def stop(n, plugin_name, package_prefix):
     if errors:
         record(f"stop-{n}", False, "; ".join(errors[:5]))
     close_lines, trace_files = db_close_evidence(log)
+    if trace_files:
+        # Keep the evidence: the trace file names the H2 instance (shaded package) that failed.
+        ev = os.path.join(WORK_DIR, "evidence", "trace-files")
+        os.makedirs(ev, exist_ok=True)
+        for t in trace_files:
+            copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
     if close_lines or trace_files:
         record(f"stop-{n}", False,
                "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
