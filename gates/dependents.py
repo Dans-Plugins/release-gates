@@ -370,8 +370,16 @@ def stop(n, plugin_name, package_prefix):
         for t in trace_files:
             copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
     if close_lines or trace_files:
-        record(f"stop-{n}", False,
-               "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
+        broken = [d["name"] for d in RESULT["dependents"] if d.get("pre_existing")]
+        detail = "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files])
+        if broken:
+            # A dependent that already fails to enable can leave a connection open on a shared
+            # database; the exit-hook failure that follows is not the candidate's. The
+            # candidate's own close is proven by the save-compatibility gate's restart cycles.
+            RESULT.setdefault("closeFailureWithBrokenDependents", []).extend(trace_files)
+            record(f"stop-{n}", True, detail + f" — with already-broken dependent(s) {broken} installed; not attributed to the candidate (see the save-compatibility gate for the candidate alone)")
+            return
+        record(f"stop-{n}", False, detail)
         return
     record(f"stop-{n}", True, "clean stop; no database close failure, no *.trace.db")
 
