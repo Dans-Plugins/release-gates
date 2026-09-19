@@ -17,11 +17,21 @@ name: Save-compatibility gate
 # plugin repository's own workflow can reuse it). Both record `result.json`, the server
 # log, the fixture and the candidate's data as run artifacts.
 #
+# Console commands only reach what a plugin lets a non-player sender do. `scenario_script`
+# names a Node/mineflayer script that joins bots to the server (offline mode is on, so any
+# name can join) and plays the plugin as players — claims, alliances, locks, gates — before
+# the fixture is recorded. The ports it uses are the ones compose.yml maps to the runner
+# (HOST_PORT -> 25565, HOST_RCON_PORT -> 25575) and the RCON password is the one this
+# workflow writes to the wrapper's .env. See gates/scenario_runner.py for the contract.
+#
 # The OMCSI checkout + Docker image cache is the pattern from boot-gate.yml (lifted from
 # Dans-Plugin-Manager's .github/workflows/integration.yml): on a cache hit the 10–15 minute
 # Spigot build is skipped.
 
 on:
+  # TEMPORARY: registers the workflow on this branch so it can be dispatched before merge.
+  push:
+    branches: [bot-scenarios]
   workflow_dispatch:
     inputs:
       repository:
@@ -91,6 +101,11 @@ on:
         type: choice
         options: [h2, mariadb, postgres, json]
         default: h2
+      scenario_script:
+        description: "Raw URL of a Node/mineflayer script (normally a file in Dans-Plugins/plugin-fixtures) run against the baseline after the console scenario; it joins bots and must exit 0 (optional)"
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       repository:
@@ -145,6 +160,10 @@ on:
         required: false
         type: string
         default: h2
+      scenario_script:
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -155,6 +174,7 @@ concurrency:
 
 jobs:
   save-compat:
+    if: github.event_name != 'push'
     name: ${{ inputs.repository }} @ ${{ inputs.sha }} (${{ inputs.backend || 'h2' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
@@ -334,6 +354,24 @@ jobs:
           docker logs mfdb >&2 || true
           exit 1
 
+      # mineflayer 4.38+ declares `node >= 22`; the versions are pinned so a fixture is
+      # recorded with a known client, and the modules live where the script will run from.
+      - name: Set up Node for the bot scenario
+        if: inputs.scenario_script != ''
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install mineflayer for the bot scenario
+        if: inputs.scenario_script != ''
+        run: |
+          set -euo pipefail
+          mkdir -p work/scenario-node
+          cd work/scenario-node
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --loglevel=error mineflayer@4.39.0 minecraft-data@3.116.0
+          node -e "const md=require('minecraft-data'); console.log('mineflayer', require('mineflayer/package.json').version, '- minecraft-data', require('minecraft-data/package.json').version, '- newest pc version known:', md.supportedVersions.pc.slice(-1)[0])"
+
       - name: Run the save-compatibility gate
         env:
           OMCSI_API_BASE: http://localhost:8092
@@ -353,6 +391,9 @@ jobs:
           DB_NAME: mf
           DB_USER: mf
           DB_PASSWORD: save-compat
+          SCENARIO_SCRIPT_URL: ${{ inputs.scenario_script }}
+          SCENARIO_NODE_DIR: ${{ github.workspace }}/work/scenario-node
+          RCON_PASSWORD: save-compat-${{ github.run_id }}
           WORK_DIR: ${{ github.workspace }}/work
           RESULT_PATH: ${{ github.workspace }}/work/result.json
         run: python gates/save_compat.py
@@ -375,6 +416,8 @@ jobs:
           r = json.load(open(p))
           print(f"## Save-compatibility gate — {'PASSED' if r['passed'] else 'FAILED'}")
           print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}; backend: {r.get('backend', 'h2')}; restart cycles: {r.get('restartCycles', 1)}; fixture: {r.get('fixtureFiles')} file(s)\n")
+          if r.get("scenarioScript"):
+              print(f"bot scenario: {r['scenarioScript']} — expected {r.get('scenarioExpected')}\n")
           fx = r.get("fixture")
           if fx:
               print(f"Supplied fixture: {fx.get('plugin')} {fx.get('version')} ({fx.get('kind')}) from {fx.get('url')} — sha256 `{fx.get('sha256')}`\n")

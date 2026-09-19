@@ -15,7 +15,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 |---|---|---|
 | [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
 | [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
-| [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides and console commands, or a published fixture such as an anonymised real-world database — migrates it, and keeps every file and every `<n> <label> loaded` count across any number of its own restarts; on the embedded H2 store, an external MariaDB or PostgreSQL, or the plugin's JSON store with a migration round trip | available |
+| [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides, console commands and a bot scenario that plays it as players, or a published fixture such as an anonymised real-world database — migrates it, and keeps every file and every `<n> <label> loaded` count across any number of its own restarts; on the embedded H2 store, an external MariaDB or PostgreSQL, or the plugin's JSON store with a migration round trip | available |
 | [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
 
 ## Boot gate
@@ -128,6 +128,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `fixture_manifest_url` | no | URL of that fixture's `manifest.json`; defaults to `manifest.json` beside the archive, which every plugin-fixtures release carries |
 | `restart_cycles` | no | how many full stop/start cycles the candidate performs after its first boot over the fixture (default `1`); every boot carries the counts, files-kept and stop checks. The release automation passes `5` for a database-backed plugin: a store that fails to close shows it on a later boot, not the first |
 | `backend` | no | the store the plugin is run on: `h2` (default — the plugin's embedded default, today's behaviour), `mariadb`, `postgres` (a database container beside the server, shared by baseline and candidate) or `json` (the plugin's JSON files, plus a migration round trip). See [Backend matrix](#backend-matrix) |
+| `scenario_script` | no | raw URL of a Node/mineflayer script (normally `scenarios/<slug>.js` in [plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) run against the baseline after the console scenario — see [Bot scenarios](#bot-scenarios) |
 
 Assertions, in order — the run stops at the first failure:
 
@@ -147,9 +148,16 @@ Assertions, in order — the run stops at the first failure:
    there are none.
 4. **scenario** — each command is sent over the console; once the console has been quiet for
    5 s, no error is attributable to the baseline. Passes with "none" when no scenario was given.
+   Then **bot-scenario** — the `scenario_script` is fetched and run against the baseline with
+   bots joined to the server; it must exit 0 within 15 minutes, and no error may be
+   attributable to the baseline while it runs. Its stdout is the evidence (`bot-scenario.log`).
+   Passes with "none" when no script was given.
 5. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
    line it prints during this boot (Medieval Factions prints `3 factions loaded (5ms)`) is
-   captured as the reference count for that label.
+   captured as the reference count for that label. Then **bot-scenario-counts** — the counts
+   the script said to expect (its `SCENARIO_EXPECTED` line) match those reference counts,
+   label by label; a label the baseline does not log is reported. Passes with "none" when no
+   script was given.
 6. **fixture-expected** — only with `fixture_url`: every label in the manifest's `expected`
    is logged by the baseline with that count. A stable release that does not load what the
    fixture promises is a finding about the stable release, and nothing about the candidate
@@ -188,6 +196,41 @@ What it does not prove: anything about data the scenario did not create (an empt
 proves only that the baseline's freshly written defaults load), that a downgrade back to the
 baseline works, or that migrated values are semantically right — only that the files and the
 counts the plugin reports survive.
+
+### Bot scenarios
+
+Console commands only reach what a plugin lets a non-player sender do — for Medieval
+Factions that is `faction admin create` and nothing that a player does: claiming, allying,
+locking a chest, building a gate. A `scenario_script` closes that gap. It is a single Node
+file (the convention is `scenarios/<slug>.js` in
+[plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) that the workflow fetches
+and runs, after the console scenario and before the baseline's restart, as
+
+```
+node <script> --host localhost --port 25565 --rcon-port 25575 \
+     --rcon-password <the run's RCON_PASSWORD> --bots 2 \
+     --server-log docker:open-mc-server --json-out <evidence>/bot-scenario.json
+```
+
+with `mineflayer` 4.39.0 and `minecraft-data` 3.116.0 installed beside it on Node 22 (the
+pins are in the workflow; mineflayer 4.38+ needs Node 22). The server runs in offline mode,
+so bots join under any name and are not operators. The script's contract, enforced by
+`gates/scenario_runner.py`:
+
+- exit 0 only when every step verified — a step is verified by reading state back (chat
+  replies, `/f info`-style commands, RCON `execute if block`), never by trusting the client;
+- print evidence to stdout: it is copied into the run log and to `bot-scenario.log`;
+- optionally end stdout with `SCENARIO_EXPECTED {"<label>": <n>, ...}`, keyed by the labels
+  the plugin prints in its `<n> <label> loaded` startup lines. The baseline's restart counts
+  are then asserted against it (**bot-scenario-counts**), so a step the script believed
+  succeeded but the plugin never persisted is caught at the next boot.
+
+A server version the installed mineflayer does not know cannot be joined: `minecraft-data`
+3.116.0 knows up to `26.1` (protocol 775) and Spigot `26.2` speaks 776, so a bot scenario
+has to be dispatched with `minecraft_version=26.1` until the PrismarineJS stack publishes
+26.2 support (a 26.2 run fails `bot-scenario` in one line saying exactly that). The fixture
+is then recorded on 26.1, which its manifest records; it proves the plugin's save format,
+not its behaviour on 26.2.
 
 ### Backend matrix
 
@@ -260,6 +303,21 @@ gh workflow run save-compat.yml --repo Dans-Plugins/release-gates \
 
 One dispatch per backend (`h2`, `mariadb`, `postgres`, `json`) is the full matrix; the runs
 are independent and concurrent (the concurrency group includes the backend).
+
+With bots instead of console-created factions (two factions, five claims, an alliance, a
+locked chest and a gate — see the script for the sequence):
+
+```
+gh workflow run save-compat.yml --repo Dans-Plugins/release-gates \
+  -f repository=Dans-Plugins/Medieval-Factions \
+  -f sha=<commit> \
+  -f jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/dev/<jar> \
+  -f baseline_jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/v5.8.1/<jar> \
+  -f expected_version=6.0.0 \
+  -f minecraft_version=26.1 \
+  -f extra_data_paths='medieval_factions_db*' \
+  -f scenario_script=https://raw.githubusercontent.com/Dans-Plugins/plugin-fixtures/main/scenarios/medieval-factions.js
+```
 
 ## Dependents gate
 
@@ -341,9 +399,11 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 - Save-compatibility gate: `save-compat-<run id>` —
   `{gate, repository, sha, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
+  (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran)
   plus `fixture.tar.gz` (what the baseline wrote — on a database backend including
   `db-dump.sql`), `fixture-listing.json`, `candidate-data.tar.gz` (the same paths after the
-  candidate's last boot), `db.log` (the database container's log) and, for a `json` run,
+  candidate's last boot), `db.log` (the database container's log), `bot-scenario.log` /
+  `bot-scenario.json` (the script's own evidence, with a bot scenario) and, for a `json` run,
   `migrationRoundtrip: {start, legs: [{from, to, migration, storageLine, counts, countsDetail, cleared}]}`
   in the result and `roundtrip-cleared-<store>.tar.gz` (the store emptied before the second leg).
 - Dependents gate: `dependents-<run id>` —
