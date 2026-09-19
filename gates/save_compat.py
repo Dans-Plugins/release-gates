@@ -39,9 +39,21 @@ It asserts, in order:
                      plugins/<Name>/ by a migration; a removed file fails. Added files are
                      reported
   stop-1             the server stops within the timeout with no error attributable to
-                     the candidate
-  candidate-boot-2, counts-2, files-kept-2, stop-2
-                     the same, over the data the candidate itself wrote
+                     the candidate and no database close failure
+  candidate-boot-k, counts-k, files-kept-k, stop-k   for k = 2 .. RESTART_CYCLES + 1
+                     the same, over the data the candidate itself wrote — one full
+                     stop/start cycle per k
+  migration-roundtrip  (BACKEND=json only) the candidate's storage migration command is
+                     run from the store it booted on to the other one and back, with a
+                     restart after each leg; every leg must reproduce the baseline counts
+                     (and the manifest's `expected`, with a supplied fixture).
+                     "not applicable" when the candidate has no migration command
+
+A `backend` assertion runs first: `h2` (the plugin's embedded default), `mariadb` /
+`postgres` (an external database in a sibling container, whose contents are dumped into the
+fixture as db-dump.sql — and a supplied fixture's db-dump.sql is restored into it before
+the baseline boots) or `json` (the plugin's file store). See the "backend matrix" section
+below for the config keys — they are Medieval Factions'.
 
 It stops at the first assertion that fails, writes `result.json`, and exits non-zero.
 
@@ -59,6 +71,10 @@ Environment:
   FIXTURE_MANIFEST     path to that fixture's manifest.json (required with FIXTURE_ARCHIVE)
   FIXTURE_URL, FIXTURE_MANIFEST_URL
                        where they came from — recorded in result.json only
+  RESTART_CYCLES       stop/start cycles of the candidate after its first boot (default 1)
+  BACKEND              h2 (default) | mariadb | postgres | json
+  DB_CONTAINER, DB_HOST, DB_NAME, DB_USER, DB_PASSWORD
+                       the database container (mariadb/postgres only; defaults mfdb/mfdb/mf/mf)
   WORK_DIR             where fixture/ and evidence/ are written (default: work)
   REPOSITORY, SHA      recorded in result.json only
   RESULT_PATH          where to write result.json (default: result.json)
@@ -97,6 +113,13 @@ FIXTURE_ARCHIVE = os.getenv("FIXTURE_ARCHIVE") or None
 FIXTURE_MANIFEST = os.getenv("FIXTURE_MANIFEST") or None
 WORK_DIR = os.getenv("WORK_DIR", "work")
 RESULT_PATH = os.getenv("RESULT_PATH", "result.json")
+RESTART_CYCLES = max(1, int((os.getenv("RESTART_CYCLES") or "1").strip() or 1))
+BACKEND = (os.getenv("BACKEND") or "h2").strip().lower()
+DB_CONTAINER = os.getenv("DB_CONTAINER") or "mfdb"
+DB_HOST = os.getenv("DB_HOST") or "mfdb"
+DB_NAME = os.getenv("DB_NAME") or "mf"
+DB_USER = os.getenv("DB_USER") or "mf"
+DB_PASSWORD = os.getenv("DB_PASSWORD") or "mf"
 
 if FIXTURE_ARCHIVE and not FIXTURE_MANIFEST:
     sys.exit("FIXTURE_ARCHIVE is set but FIXTURE_MANIFEST is not: a supplied fixture needs its manifest")
@@ -120,6 +143,9 @@ RESULT = {
     "baselineVersion": None,
     "version": None,
     "passed": False,
+    "backend": BACKEND,
+    "restartCycles": RESTART_CYCLES,
+    # counts[label] = [baseline, candidate boot 1, ..., candidate boot RESTART_CYCLES + 1]
     "counts": {},
     # A supplied fixture: where it came from and what its manifest promises. None when the
     # gate recorded the fixture itself from the baseline's scenario.
@@ -269,6 +295,7 @@ DONE_LINE = re.compile(r"Done \([\d.]+s\)!")
 # "3 factions loaded (5ms)" -> ("3", "factions"); the label is what the plugin calls the
 # collection, so the same label on a later boot is the same collection.
 COUNT_LINE = re.compile(r"(\d+) ([\w][\w \-]*?) loaded")
+CAUSE_LINE = re.compile(r"^\s*(\[[^\]]*\]:\s*)?[\w.$]+(Exception|Error)\b")
 
 
 def attributable_errors(log, plugin_name, package_prefix):
@@ -328,14 +355,19 @@ def restart_and_enable(name, plugin_name, package_prefix, jar_basename):
         record(name, False, f"no 'Enabling {plugin_name}' line during startup")
     version = enabling.group(1)
 
+    lines = log.splitlines()
     for marker in (
         f"Error occurred while enabling {plugin_name}",
         f"Could not load 'plugins/{jar_basename}'",
         "UnknownDependencyException",
         f"Disabling {plugin_name}",
     ):
-        if marker in log:
-            record(name, False, f"startup log contains {marker!r}")
+        i = next((i for i, line in enumerate(lines) if marker in line), None)
+        if i is not None:
+            # Bukkit prints the exception (ClassNotFoundException, NoClassDefFoundError…) on
+            # the line after the marker; that line is the finding, so it is quoted.
+            cause = next((l.strip() for l in lines[i + 1:i + 4] if CAUSE_LINE.match(l)), "")
+            record(name, False, f"startup log contains {marker!r}" + (f": {cause}" if cause else ""))
 
     errors = attributable_errors(log, plugin_name, package_prefix)
     if errors:
@@ -344,20 +376,35 @@ def restart_and_enable(name, plugin_name, package_prefix, jar_basename):
 
 
 def apply_config_overrides(plugin_name):
-    if not CONFIG_OVERRIDES:
-        record("config-overrides", True, "none")
+    # The backend's own keys go on top of the caller's: a caller cannot point a
+    # `backend: mariadb` run back at H2 by accident.
+    backend_lines, backend_note = backend_overrides(plugin_name)
+    lines = CONFIG_OVERRIDES + backend_lines
+    if not lines:
+        record("config-overrides", True, "none" + backend_note)
         return
+    applied = write_config_overrides(plugin_name, lines, "config-overrides")
+    if backend_note:
+        RESULT["configOverridesNote"] = backend_note.strip("; ")
+    return applied
+
+
+def write_config_overrides(plugin_name, lines, assertion):
+    """Apply `dotted.key: value` lines to plugins/<Name>/config.yml in the container.
+
+    Any failure is recorded against `assertion`. Returns the list of applied `key=value`.
+    """
     container_path = f"{SERVER_ROOT}/plugins/{plugin_name}/config.yml"
     local = os.path.join(WORK_DIR, "config-overrides", "config.yml")
     ok, err = copy_out(container_path, local)
     if not ok:
-        record("config-overrides", False, f"plugins/{plugin_name}/config.yml could not be read after the baseline boot: {err}")
+        record(assertion, False, f"plugins/{plugin_name}/config.yml could not be read after the baseline boot: {err}")
     with open(local) as f:
         config = yaml.safe_load(f) or {}
     applied = []
-    for line in CONFIG_OVERRIDES:
+    for line in lines:
         if ":" not in line:
-            record("config-overrides", False, f"not a `dotted.key: value` line: {line!r}")
+            record(assertion, False, f"not a `dotted.key: value` line: {line!r}")
         key, _, value = line.partition(":")
         keys = key.strip().split(".")
         node = config
@@ -372,7 +419,7 @@ def apply_config_overrides(plugin_name):
     dumped = yaml.safe_dump(config, default_flow_style=False, sort_keys=False)
     ok, _, err = docker_exec("sh", "-c", f"cat > '{container_path}'", input_bytes=dumped.encode("utf-8"))
     if not ok:
-        record("config-overrides", False, f"config.yml could not be written back: {err}")
+        record(assertion, False, f"config.yml could not be written back: {err}")
     with open(local, "w") as f:
         f.write(dumped)
     print(f"  applied {applied}")
@@ -430,6 +477,14 @@ def capture(dest, data_paths):
             captured.append(rel)
         else:
             print(f"  {rel}: not captured ({err})")
+    # An external database's contents are part of the plugin's data: dumped beside the
+    # plugin folder so the fixture holds them and files-kept tracks the dump like a file.
+    if BACKEND in DB_BACKENDS:
+        ok, err = db_dump(os.path.join(dest, DB_DUMP_NAME))
+        if ok:
+            captured.append(DB_DUMP_NAME)
+        else:
+            print(f"  {DB_DUMP_NAME}: not captured ({err})")
     return captured, listing_of(dest)
 
 
@@ -511,14 +566,10 @@ def check_fixture_expected(baseline_counts):
     record("fixture-expected", True, f"baseline logged every expected count: {EXPECTED}")
 
 
-def check_counts(n, baseline_counts, log):
-    counts = loaded_counts(log)
-    for label, value in counts.items():
-        RESULT["counts"].setdefault(label, [None, None, None])[n] = value
+def compare_counts(baseline_counts, counts):
+    """(mismatched, detail) for a candidate boot's counts against the baseline's."""
     if not baseline_counts:
-        record(f"counts-{n}", True, "baseline logged no counts"
-               + (f"; candidate logged {counts}" if counts else ""))
-        return
+        return {}, "baseline logged no counts" + (f"; candidate logged {counts}" if counts else "")
     mismatched = {l: (baseline_counts[l], counts[l]) for l in baseline_counts if l in counts and counts[l] != baseline_counts[l]}
     only_baseline = sorted(set(baseline_counts) - set(counts))
     only_candidate = sorted(set(counts) - set(baseline_counts))
@@ -529,12 +580,33 @@ def check_counts(n, baseline_counts, log):
     if only_candidate:
         detail += f"; only candidate logged {only_candidate}"
     if mismatched:
-        record(f"counts-{n}", False, "mismatch (baseline, candidate): " + str(mismatched) + "; " + detail)
+        detail = "mismatch (baseline, candidate): " + str(mismatched) + "; " + detail
+    return mismatched, detail
+
+
+def expected_problem(counts):
+    """A supplied fixture's manifest promise, checked against one boot's counts: the
+    failure text, or None when every expected label was logged with its count."""
+    if not EXPECTED:
+        return None
+    exp_mismatched, exp_missing = against_expected(counts)
+    if exp_mismatched or exp_missing:
+        return ("mismatch against the manifest (expected, candidate): " + str(exp_mismatched)
+                + (f"; expected but not logged {exp_missing}" if exp_missing else ""))
+    return None
+
+
+def check_counts(n, baseline_counts, log):
+    counts = loaded_counts(log)
+    for label, value in counts.items():
+        RESULT["counts"].setdefault(label, [None] * (RESTART_CYCLES + 2))[n] = value
+    mismatched, detail = compare_counts(baseline_counts, counts)
+    if mismatched:
+        record(f"counts-{n}", False, detail)
+    problem = expected_problem(counts)
+    if problem:
+        record(f"counts-{n}", False, problem + "; " + detail)
     if EXPECTED:
-        exp_mismatched, exp_missing = against_expected(counts)
-        if exp_mismatched or exp_missing:
-            record(f"counts-{n}", False, "mismatch against the manifest (expected, candidate): " + str(exp_mismatched)
-                   + (f"; expected but not logged {exp_missing}" if exp_missing else "") + "; " + detail)
         detail += "; equals the manifest's expected counts"
     record(f"counts-{n}", True, detail)
 
@@ -601,15 +673,32 @@ def db_close_evidence(log):
 
 
 def stop(n, plugin_name, package_prefix):
+    stop_checked(f"stop-{n}", plugin_name, package_prefix)
+
+
+def stop_checked(name, plugin_name, package_prefix):
+    """Stop the server and record `name`: fails on an error attributable to the plugin or on
+    any database close failure."""
+    problems = stop_problems(name, plugin_name, package_prefix)
+    if problems:
+        record(name, False, problems[0])
+    note = "; baseline had left a trace file, unchanged by the candidate" if TRACE_BEFORE_CANDIDATE else ""
+    record(name, True, f"clean stop; no database close failure, no new or grown *.trace.db{note}")
+
+
+def stop_problems(label, plugin_name, package_prefix):
+    """Stop the server; return what was wrong with the stop (empty when it was clean):
+    the server still running, errors attributable to the plugin, a database close failure."""
     cursor = now_cursor()
-    stopped = stop_server(f"stop {n}")
+    stopped = stop_server(label)
     if not stopped:
-        record(f"stop-{n}", False, "server still running 120s after stop")
+        return ["server still running 120s after stop"]
     time.sleep(2)
     log = logs_since(cursor)
+    problems = []
     errors = attributable_errors(log, plugin_name, package_prefix)
     if errors:
-        record(f"stop-{n}", False, "; ".join(errors[:5]))
+        problems.append("; ".join(errors[:5]))
     close_lines, trace_files = db_close_evidence(log)
     if trace_files:
         # Keep the evidence: the trace file names the H2 instance (shaded package) that failed.
@@ -618,10 +707,267 @@ def stop(n, plugin_name, package_prefix):
         for t in trace_files:
             copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
     if close_lines or trace_files:
-        record(f"stop-{n}", False,
-               "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
-    note = "; baseline had left a trace file, unchanged by the candidate" if TRACE_BEFORE_CANDIDATE else ""
-    record(f"stop-{n}", True, f"clean stop; no database close failure, no new or grown *.trace.db{note}")
+        problems.append("database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files]))
+    return problems
+
+
+# --- backend matrix ----------------------------------------------------------------------
+#
+# The config keys below are Medieval Factions' (the fleet's flagship, whose save integrity is
+# what this gate exists for): `database.*` for the jOOQ/Flyway store, `storage.type` and
+# `storage.json.path` for the JSON store added in 6.0.0, and `faction migrate toJson |
+# toDatabase` as the migration command. A plugin with other keys is served by `h2` (no
+# overrides) and by the caller's own CONFIG_OVERRIDES.
+
+DB_BACKENDS = ("mariadb", "postgres")
+BACKENDS = ("h2",) + DB_BACKENDS + ("json",)
+DB_DUMP_NAME = "db-dump.sql"
+STORAGE_TYPE_KEY = "storage.type"
+JSON_PATH_KEY = "storage.json.path"
+DATABASE_URL_KEY = "database.url"
+DEFAULT_JSON_PATH = "./medieval_factions_data"
+MIGRATE_COMMANDS = {"json": "faction migrate toJson", "database": "faction migrate toDatabase"}
+MIGRATE_USAGE_PROBE = "faction migrate"
+MIGRATE_USAGE_MARKER = "Storage Migration"
+MIGRATE_SUCCESS = re.compile(r"Migration Successful")
+MIGRATE_ITEMS = re.compile(r"Migrated (\d+) items")
+MIGRATE_FAILED = re.compile(r"Migration Failed|Migration failed")
+STORAGE_TYPE_LINE = re.compile(r"[Uu]sing storage type: (\w+)")
+
+# jOOQ's SQLDialect enum names — `SQLDialect.valueOf(config.database.dialect)` is how the
+# plugin reads the key, so `MySQL` / `PostgreSQL` (as some docs spell them) would throw.
+BACKEND_DB_OVERRIDES = {
+    "mariadb": [f"{DATABASE_URL_KEY}: jdbc:mariadb://{DB_HOST}:3306/{DB_NAME}", "database.dialect: MARIADB"],
+    "postgres": [f"{DATABASE_URL_KEY}: jdbc:postgresql://{DB_HOST}:5432/{DB_NAME}", "database.dialect: POSTGRES"],
+}
+# Which store the baseline was left on for a `json` run; decided once its config is known.
+BASELINE_STORAGE = {"type": None}
+
+
+def read_config(plugin_name, dest_name):
+    """plugins/<Name>/config.yml as a dict (empty when unreadable)."""
+    local = os.path.join(WORK_DIR, "config-overrides", dest_name)
+    ok, _ = copy_out(f"{SERVER_ROOT}/plugins/{plugin_name}/config.yml", local)
+    if not ok:
+        return {}
+    with open(local) as f:
+        return yaml.safe_load(f) or {}
+
+
+def config_get(config, dotted):
+    node = config
+    for k in dotted.split("."):
+        if not isinstance(node, dict) or k not in node:
+            return None
+        node = node[k]
+    return node
+
+
+def backend_overrides(plugin_name):
+    """(override lines, note) for the backend, given the config the baseline's first boot wrote."""
+    if BACKEND == "h2":
+        return [], ""
+    if BACKEND in DB_BACKENDS:
+        return BACKEND_DB_OVERRIDES[BACKEND] + [f"database.username: {DB_USER}", f"database.password: {DB_PASSWORD}"], ""
+    # json: only a baseline that declares the key can be switched. One that does not
+    # (Medieval Factions 5.x) stays on its default store; the candidate's round trip then
+    # starts from that store instead of from JSON.
+    config = read_config(plugin_name, "baseline-config.yml")
+    if config_get(config, STORAGE_TYPE_KEY) is None:
+        BASELINE_STORAGE["type"] = "database"
+        return [], f"; baseline config declares no {STORAGE_TYPE_KEY} — it has no JSON store, so it stays on its default store and the fixture is that store's"
+    BASELINE_STORAGE["type"] = "json"
+    return [f"{STORAGE_TYPE_KEY}: json", f"{JSON_PATH_KEY}: {DEFAULT_JSON_PATH}"], ""
+
+
+def json_store_path(plugin_name):
+    """Server-root-relative path of the JSON store, from the config (default when unset)."""
+    config = read_config(plugin_name, "current-config.yml")
+    path = config_get(config, JSON_PATH_KEY) or DEFAULT_JSON_PATH
+    return str(path).lstrip("./") or DEFAULT_JSON_PATH.lstrip("./")
+
+
+def h2_store_glob(plugin_name):
+    """Glob for the embedded H2 files named by database.url, e.g. medieval_factions_db*."""
+    config = read_config(plugin_name, "current-config.yml")
+    url = str(config_get(config, DATABASE_URL_KEY) or "")
+    m = re.match(r"jdbc:h2:(?:file:)?(?:\./)?([^;]+)", url)
+    return f"{m.group(1)}*" if m else None
+
+
+def _db_cli(args, input_bytes=None):
+    cmd = ["docker", "exec"] + (["-i"] if input_bytes is not None else [])
+    if BACKEND == "postgres":
+        cmd += ["-e", f"PGPASSWORD={DB_PASSWORD}"]
+    cmd += [DB_CONTAINER] + args
+    r = subprocess.run(cmd, capture_output=True, input=input_bytes, timeout=120)
+    return r.returncode == 0, r.stdout, r.stderr.decode("utf-8", "replace").strip()
+
+
+def db_reachable():
+    """(ok, detail): the database accepts a connection from the harness's side."""
+    if BACKEND == "mariadb":
+        ok, out, err = _db_cli(["mariadb", f"-u{DB_USER}", f"-p{DB_PASSWORD}", "-h", "127.0.0.1", "-N", "-e", "select version()", DB_NAME])
+    else:
+        ok, out, err = _db_cli(["psql", "-U", DB_USER, "-d", DB_NAME, "-tA", "-c", "select version()"])
+    return ok, (out.decode("utf-8", "replace").strip() if ok else err)
+
+
+def db_dump(dest):
+    """Dump the database's contents (schema + rows) to dest. Dump dates are suppressed so an
+    unchanged database yields an unchanged file."""
+    if BACKEND == "mariadb":
+        ok, out, err = _db_cli(["mariadb-dump", f"-u{DB_USER}", f"-p{DB_PASSWORD}", "-h", "127.0.0.1", "--skip-dump-date", DB_NAME])
+    else:
+        ok, out, err = _db_cli(["pg_dump", "-U", DB_USER, DB_NAME])
+    if not ok:
+        return False, err
+    os.makedirs(os.path.dirname(dest) or ".", exist_ok=True)
+    with open(dest, "wb") as f:
+        f.write(out)
+    return True, ""
+
+
+def restore_fixture_dump():
+    """A supplied fixture for a database backend carries the database's contents as
+    db-dump.sql (what this gate's own `fixture` step records); restore it into the fresh
+    database before the baseline boots, so the baseline is booted over that data once the
+    backend overrides point it there."""
+    if BACKEND not in DB_BACKENDS or not FIXTURE_ARCHIVE:
+        return
+    dump = None
+    with tarfile.open(FIXTURE_ARCHIVE) as tar:
+        for m in tar.getmembers():
+            if m.isfile() and m.name.rstrip("/").split("/")[-1] == DB_DUMP_NAME:
+                dump = tar.extractfile(m).read()
+                break
+    if dump is None:
+        print(f"  NOTE: the supplied fixture carries no {DB_DUMP_NAME}; the {BACKEND} database starts empty")
+        RESULT["fixture"]["dbDump"] = None
+        return
+    if BACKEND == "mariadb":
+        ok, _, err = _db_cli(["mariadb", f"-u{DB_USER}", f"-p{DB_PASSWORD}", "-h", "127.0.0.1", DB_NAME], input_bytes=dump)
+    else:
+        ok, _, err = _db_cli(["psql", "-U", DB_USER, "-d", DB_NAME, "-v", "ON_ERROR_STOP=1", "-q"], input_bytes=dump)
+    if not ok:
+        record("fixture-unpack", False, f"{DB_DUMP_NAME} from the supplied fixture could not be restored into {BACKEND}: {err[:500]}")
+    RESULT["fixture"]["dbDump"] = {"bytes": len(dump), "sha256": hashlib.sha256(dump).hexdigest()}
+    print(f"  restored {DB_DUMP_NAME} ({len(dump)} bytes) into {BACKEND}")
+
+
+def check_backend():
+    """The `backend` assertion: the backend is known and, for a database, reachable."""
+    if BACKEND not in BACKENDS:
+        record("backend", False, f"unknown backend {BACKEND!r}; one of {list(BACKENDS)}")
+    if BACKEND == "h2":
+        record("backend", True, "h2 — the plugin's embedded default store; no overrides")
+        return
+    if BACKEND in DB_BACKENDS:
+        ok, detail = db_reachable()
+        if not ok:
+            record("backend", False, f"{BACKEND}: database container {DB_CONTAINER!r} does not accept connections (harness/runner problem, not the plugin): {detail}")
+        record("backend", True, f"{BACKEND}: {DB_CONTAINER} accepts connections ({detail}); "
+               f"overrides {BACKEND_DB_OVERRIDES[BACKEND] + [f'database.username: {DB_USER}', 'database.password: …']}; "
+               f"one database spans baseline and candidate; its contents are dumped into the fixture as {DB_DUMP_NAME}")
+        return
+    record("backend", True, f"json: `{STORAGE_TYPE_KEY}: json` is applied to a baseline that declares the key; "
+           "the candidate's migration command is exercised both ways after its restart cycles")
+
+
+def wait_for_migration(cursor, plugin_name, package_prefix, timeout=240):
+    """Wait for the plugin's migration command to report; (ok, detail)."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        log = logs_since(cursor)
+        if MIGRATE_SUCCESS.search(log):
+            m = MIGRATE_ITEMS.search(log)
+            return True, f"migrated {m.group(1) if m else '?'} items"
+        if MIGRATE_FAILED.search(log):
+            failed = [l.strip() for l in log.splitlines() if MIGRATE_FAILED.search(l) or "Target storage already" in l]
+            return False, "; ".join((failed + attributable_errors(log, plugin_name, package_prefix))[:5])
+        time.sleep(3)
+    return False, f"no migration result within {timeout}s"
+
+
+def clear_store(plugin_name, storage_type, evidence_name):
+    """Empty the given store with the server stopped (its files are kept as evidence), so
+    the migration back into it has the empty target it requires."""
+    if storage_type == "json":
+        patterns = [json_store_path(plugin_name)]
+    else:
+        g = h2_store_glob(plugin_name)
+        patterns = [g] if g else []
+    paths = expand_globs(patterns)
+    if not paths:
+        return f"nothing to clear for {storage_type} (looked for {patterns})"
+    capture(os.path.join(WORK_DIR, "roundtrip", evidence_name), paths)
+    archive(os.path.join(WORK_DIR, "roundtrip", evidence_name), os.path.join(WORK_DIR, "evidence", f"roundtrip-{evidence_name}.tar.gz"))
+    for p in paths:
+        docker_exec("sh", "-c", f"cd {SERVER_ROOT} && rm -rf '{p}'")
+        # A trace file that was the baseline's is gone with the store; one that reappears
+        # under the same name is the candidate's.
+        TRACE_BEFORE_CANDIDATE.pop(p, None)
+    return f"cleared {paths}"
+
+
+def migration_roundtrip(plugin_name, package_prefix, jar_basename, baseline_counts, start):
+    """`migration-roundtrip`: from the store the candidate is on (`start`: json|database),
+    migrate to the other, restart on it, compare counts; empty `start`, migrate back,
+    restart on it, compare counts. Each stop carries the full stop check."""
+    name = "migration-roundtrip"
+    other = "json" if start == "database" else "database"
+    print(f"\n[{name}] starting on {start}")
+    restart_and_enable(name, plugin_name, package_prefix, jar_basename)
+    cursor = now_cursor()
+    send_command(MIGRATE_USAGE_PROBE)
+    time.sleep(5)
+    if MIGRATE_USAGE_MARKER not in logs_since(cursor):
+        stop_server(name)
+        record(name, True, f"not applicable: the candidate does not answer `{MIGRATE_USAGE_PROBE}` with its usage — no storage migration command")
+        return
+    legs = []
+    RESULT["migrationRoundtrip"] = {"start": start, "legs": legs}
+    for i, (src, dst) in enumerate(((start, other), (other, start))):
+        leg = {"from": src, "to": dst}
+        legs.append(leg)
+        if i == 1:
+            # The store the run started on still holds the data; the migration refuses a
+            # non-empty target, exactly as it would for an operator.
+            problems = stop_problems(name, plugin_name, package_prefix)
+            if problems:
+                record(name, False, f"stop on {src} before clearing {dst}: {problems[0]}")
+            leg["cleared"] = clear_store(plugin_name, dst, f"cleared-{dst}")
+            print(f"  {leg['cleared']}")
+            restart_and_enable(name, plugin_name, package_prefix, jar_basename)
+        cursor = now_cursor()
+        send_command(MIGRATE_COMMANDS[dst])
+        ok, detail = wait_for_migration(cursor, plugin_name, package_prefix)
+        leg["migration"] = detail
+        if not ok:
+            record(name, False, f"{src}→{dst}: {detail}")
+        problems = stop_problems(name, plugin_name, package_prefix)
+        if problems:
+            record(name, False, f"{src}→{dst}, stop after migrating: {problems[0]}")
+        write_config_overrides(plugin_name, [f"{STORAGE_TYPE_KEY}: {dst}"], name)
+        log, _ = restart_and_enable(name, plugin_name, package_prefix, jar_basename)
+        m = STORAGE_TYPE_LINE.search(log)
+        leg["storageLine"] = m.group(0) if m else None
+        if m and m.group(1).lower() != dst:
+            record(name, False, f"{src}→{dst}: after the switch the plugin reports {m.group(0)!r}")
+        counts = loaded_counts(log)
+        leg["counts"] = counts
+        mismatched, cdetail = compare_counts(baseline_counts, counts)
+        leg["countsDetail"] = cdetail
+        if mismatched:
+            record(name, False, f"{src}→{dst} restart on {dst}: {cdetail}")
+        problem = expected_problem(counts)
+        if problem:
+            record(name, False, f"{src}→{dst} restart on {dst}: {problem}")
+        print(f"  {src}→{dst}: {detail}; on {dst}: {cdetail}")
+    problems = stop_problems(name, plugin_name, package_prefix)
+    if problems:
+        record(name, False, f"stop after the round trip: {problems[0]}")
+    record(name, True, "; ".join(f"{l['from']}→{l['to']}: {l['migration']}, restart on {l['to']} {l['countsDetail']}" for l in legs))
 
 
 # --- main --------------------------------------------------------------------------------
@@ -645,6 +991,11 @@ def main():
         print(f"fixture:   {os.path.basename(FIXTURE_ARCHIVE)} sha256={RESULT['fixture']['sha256']} "
               f"{MANIFEST.get('plugin')} {MANIFEST.get('version')} ({MANIFEST.get('kind', 'recorded')}) expected={EXPECTED}")
 
+    print(f"backend={BACKEND} restart_cycles={RESTART_CYCLES}")
+
+    print("\n[backend]")
+    check_backend()
+
     print("\n[baseline] waiting for the server's first start...")
     if not wait_for(is_running, 600, "baseline server", poll=10):
         record("baseline-boot", False, "server never started (BuildTools / image problem, not the plugin)")
@@ -662,6 +1013,7 @@ def main():
         # current stable release.
         print("\n[fixture-unpack]")
         unpack_fixture()
+        restore_fixture_dump()
 
     print("\n[baseline-boot]")
     log, baseline_version = restart_and_enable("baseline-boot", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
@@ -682,7 +1034,7 @@ def main():
     log, _ = restart_and_enable("baseline-restart", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
     baseline_counts = loaded_counts(log)
     for label, value in baseline_counts.items():
-        RESULT["counts"][label] = [value, None, None]
+        RESULT["counts"][label] = [value] + [None] * (RESTART_CYCLES + 1)
     record("baseline-restart", True, f"enabled over its own data; counts {baseline_counts}")
 
     if FIXTURE_ARCHIVE:
@@ -695,7 +1047,10 @@ def main():
     data_paths = [f"plugins/{baseline_name}"]
     if plugin_name != baseline_name:
         data_paths.append(f"plugins/{plugin_name}")
-    data_paths += [p for p in expand_globs(EXTRA_DATA_PATHS) if p not in data_paths]
+    extra = list(EXTRA_DATA_PATHS)
+    if BACKEND == "json" and BASELINE_STORAGE["type"] == "json":
+        extra.append(json_store_path(baseline_name))
+    data_paths += [p for p in expand_globs(extra) if p not in data_paths]
     DATA_PATHS.extend(data_paths)
     # Anything the baseline left behind on its own shutdowns is a fact about the current
     # stable release, not about the candidate. Record it, and use it as the reference point
@@ -722,7 +1077,10 @@ def main():
         record("candidate-boot-1", False, f"baseline jar could not be removed: {err}")
     deploy_jar(CANDIDATE_JAR)
 
-    for n in (1, 2):
+    # Boot 1 migrates the fixture; every further boot is a full stop/start cycle over what
+    # the candidate itself wrote. The release automation asks for several cycles from a
+    # database-backed plugin: a store that fails to close only shows it on a later boot.
+    for n in range(1, RESTART_CYCLES + 2):
         print(f"\n[candidate-boot-{n}]")
         log, version = restart_and_enable(f"candidate-boot-{n}", plugin_name, candidate_pkg, os.path.basename(CANDIDATE_JAR))
         RESULT["version"] = version
@@ -739,6 +1097,10 @@ def main():
 
         print(f"\n[stop-{n}]")
         stop(n, plugin_name, candidate_pkg)
+
+    if BACKEND == "json":
+        migration_roundtrip(plugin_name, candidate_pkg, os.path.basename(CANDIDATE_JAR), baseline_counts,
+                            BASELINE_STORAGE["type"] or "database")
 
     finish(True)
 
