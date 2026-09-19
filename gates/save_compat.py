@@ -21,8 +21,14 @@ It asserts, in order:
                      the baseline enables again over the edited config ("none" when empty)
   scenario           console commands are sent ~3s apart; once the console has been quiet
                      for 5s, no error is attributable to the baseline ("none" when empty)
+  bot-scenario       a Node/mineflayer script (SCENARIO_SCRIPT_URL) joins bots and plays
+                     the plugin as players; it must exit 0 with no error attributable to
+                     the baseline ("none" when empty) — see gates/scenario_runner.py
   baseline-restart   the baseline enables over its own data; every `<n> <label> loaded`
                      line it prints is captured as the reference count for that label
+  bot-scenario-counts
+                     the counts the script said to expect match the baseline's restart
+                     counts ("none" when no script)
   fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
                      logged by the baseline with that count
   fixture            the server is stopped; plugins/<Name> and every extra data path are
@@ -64,6 +70,8 @@ Environment:
   EXPECTED_VERSION     the version string the candidate must enable with (optional)
   CONFIG_OVERRIDES     newline-separated `dotted.key: value` lines (optional)
   SCENARIO             newline-separated console commands (optional)
+  SCENARIO_SCRIPT_URL  raw URL of a Node/mineflayer scenario script (optional; the rest of
+                       its environment is documented in gates/scenario_runner.py)
   EXTRA_DATA_PATHS     newline-separated server-root-relative glob patterns (optional)
   FIXTURE_ARCHIVE      path to a fixture tar.gz to boot the baseline over instead of
                        recording one (optional); entries are server-root-relative, a
@@ -97,6 +105,8 @@ import zipfile
 
 import requests
 import yaml
+
+import scenario_runner  # bot scenario (gates/scenario_runner.py); the only other touch is in main()
 
 API_BASE = os.getenv("OMCSI_API_BASE", "http://localhost:8092")
 TOKEN = os.environ["OMCSI_DEPLOY_TOKEN"]
@@ -1036,12 +1046,19 @@ def main():
     print("\n[scenario]")
     run_scenario(baseline_name, baseline_pkg)
 
+    # --- bot scenario (gates/scenario_runner.py): a mineflayer script drives players -----
+    print("\n[bot-scenario]")
+    scenario_runner.run_bot_scenario(record, RESULT, WORK_DIR, CONTAINER, baseline_name, baseline_pkg,
+                                     now_cursor, logs_since, attributable_errors)
+    # ---------------------------------------------------------------------------------------
+
     print("\n[baseline-restart]")
     log, _ = restart_and_enable("baseline-restart", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
     baseline_counts = loaded_counts(log)
     for label, value in baseline_counts.items():
         RESULT["counts"][label] = [value] + [None] * (RESTART_CYCLES + 1)
     record("baseline-restart", True, f"enabled over its own data; counts {baseline_counts}")
+    scenario_runner.check_expected_counts(record, RESULT, baseline_counts)  # bot scenario, see above
 
     if FIXTURE_ARCHIVE:
         print("\n[fixture-expected]")
