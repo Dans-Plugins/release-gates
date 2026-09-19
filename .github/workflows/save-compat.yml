@@ -22,6 +22,9 @@ name: Save-compatibility gate
 # Spigot build is skipped.
 
 on:
+  # TEMPORARY: registers the workflow on this branch so it can be dispatched before merge.
+  push:
+    branches: [backend-matrix]
   workflow_dispatch:
     inputs:
       repository:
@@ -155,6 +158,7 @@ concurrency:
 
 jobs:
   save-compat:
+    if: github.event_name != 'push'
     name: ${{ inputs.repository }} @ ${{ inputs.sha }} (${{ inputs.backend || 'h2' }})
     runs-on: ubuntu-latest
     timeout-minutes: 90
