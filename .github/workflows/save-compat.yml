@@ -6,6 +6,12 @@ name: Save-compatibility gate
 # folder is captured as a fixture, and the candidate is then booted over that data twice.
 # See gates/save_compat.py for the assertions.
 #
+# With `fixture_url` nothing is recorded: the fixture (a plugin-fixtures release asset,
+# with its `manifest.json` beside it) is unpacked into the server root before the
+# baseline's first boot, the baseline is booted over it — proving the fixture loads on the
+# stable and fixing the reference counts, which must also equal the manifest's `expected`
+# — and the candidate follows exactly as otherwise.
+#
 # Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
 # automation, or a person, dispatches it with the two jar URLs) and `workflow_call` (a
 # plugin repository's own workflow can reuse it). Both record `result.json`, the server
@@ -64,6 +70,16 @@ on:
         required: false
         type: string
         default: ""
+      fixture_url:
+        description: "URL of a fixture tar.gz (a plugin-fixtures release asset) to boot the baseline over instead of recording one (optional)"
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
+        description: "URL of that fixture's manifest.json; defaults to manifest.json beside the archive, as every plugin-fixtures release carries it"
+        required: false
+        type: string
+        default: ""
   workflow_call:
     inputs:
       repository:
@@ -99,6 +115,14 @@ on:
         type: string
         default: ""
       extra_data_paths:
+        required: false
+        type: string
+        default: ""
+      fixture_url:
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
         required: false
         type: string
         default: ""
@@ -152,6 +176,27 @@ jobs:
           curl -fsSL -o "work/baseline/$name" "${{ inputs.baseline_jar_url }}"
           unzip -l "work/baseline/$name" plugin.yml >/dev/null
           echo "BASELINE_JAR=$PWD/work/baseline/$name" >> "$GITHUB_ENV"
+
+      # A supplied fixture replaces the recording: the archive and the manifest.json published
+      # beside it (the plugin-fixtures convention: every fixture release carries both).
+      - name: Download fixture
+        if: inputs.fixture_url != ''
+        run: |
+          set -euo pipefail
+          mkdir -p work/fixture-input
+          url="${{ inputs.fixture_url }}"
+          manifest_url="${{ inputs.fixture_manifest_url }}"
+          manifest_url="${manifest_url:-${url%/*}/manifest.json}"
+          curl -fsSL -o work/fixture-input/fixture.tar.gz "$url"
+          tar tzf work/fixture-input/fixture.tar.gz >/dev/null
+          curl -fsSL -o work/fixture-input/manifest.json "$manifest_url"
+          python -c 'import json; m = json.load(open("work/fixture-input/manifest.json")); print(m["plugin"], m["version"], m.get("kind", "recorded"), "expected:", m.get("expected"))'
+          {
+            echo "FIXTURE_ARCHIVE=$PWD/work/fixture-input/fixture.tar.gz"
+            echo "FIXTURE_MANIFEST=$PWD/work/fixture-input/manifest.json"
+            echo "FIXTURE_URL=$url"
+            echo "FIXTURE_MANIFEST_URL=$manifest_url"
+          } >> "$GITHUB_ENV"
 
       # Each dependency is resolved to its current *stable* release — the same
       # /releases/latest endpoint DPM installs from — so the gate boots what an operator gets.
@@ -248,6 +293,8 @@ jobs:
           CONFIG_OVERRIDES: ${{ inputs.config_overrides }}
           SCENARIO: ${{ inputs.scenario }}
           EXTRA_DATA_PATHS: ${{ inputs.extra_data_paths }}
+          # FIXTURE_ARCHIVE / FIXTURE_MANIFEST / FIXTURE_URL / FIXTURE_MANIFEST_URL come from
+          # the Download fixture step's GITHUB_ENV when fixture_url was given.
           WORK_DIR: ${{ github.workspace }}/work
           RESULT_PATH: ${{ github.workspace }}/work/result.json
         run: python gates/save_compat.py
@@ -269,10 +316,20 @@ jobs:
           r = json.load(open(p))
           print(f"## Save-compatibility gate — {'PASSED' if r['passed'] else 'FAILED'}")
           print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}; fixture: {r.get('fixtureFiles')} file(s)\n")
-          if r.get("counts"):
-              print("| loaded | baseline | candidate boot 1 | candidate boot 2 |\n|---|---|---|---|")
-              for label, (b, c1, c2) in r["counts"].items():
-                  print(f"| {label} | {'' if b is None else b} | {'' if c1 is None else c1} | {'' if c2 is None else c2} |")
+          fx = r.get("fixture")
+          if fx:
+              print(f"Supplied fixture: {fx.get('plugin')} {fx.get('version')} ({fx.get('kind')}) from {fx.get('url')} — sha256 `{fx.get('sha256')}`\n")
+          expected = (fx or {}).get("expected") or {}
+          if r.get("counts") or expected:
+              labels = list(r.get("counts", {})) + [l for l in expected if l not in r.get("counts", {})]
+              print("| loaded | " + ("manifest expected | " if expected else "") + "baseline | candidate boot 1 | candidate boot 2 |")
+              print("|---|" + ("---|" if expected else "") + "---|---|---|")
+              for label in labels:
+                  b, c1, c2 = r.get("counts", {}).get(label, [None, None, None])
+                  row = f"| {label} | "
+                  if expected:
+                      row += f"{'' if label not in expected else expected[label]} | "
+                  print(row + f"{'' if b is None else b} | {'' if c1 is None else c1} | {'' if c2 is None else c2} |")
               print()
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:

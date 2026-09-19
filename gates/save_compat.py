@@ -6,8 +6,15 @@ Drives an OMCSI `minecraft-wrapper` container through its REST API (the same sur
 Dan's Plugin Manager's integration test uses) and reads the server's console from
 `docker logs`. The baseline (the current stable jar) is booted first and asked to write
 data; that data is captured as a fixture; the candidate is then booted over it twice.
+With a supplied fixture (FIXTURE_ARCHIVE, a plugin-fixtures release asset) nothing is
+recorded: the archive is unpacked into the server root before the baseline's first
+boot, the baseline is booted over it — which proves the fixture loads on the stable and
+establishes the reference counts — and the candidate then follows exactly as below.
 It asserts, in order:
 
+  fixture-unpack     (supplied fixture only) the server is stopped after its first start
+                     and the archive is unpacked into the server root as the server's own
+                     user; every path the manifest lists exists
   baseline-boot      dependency jars + the baseline jar are deployed; after a restart the
                      baseline reports Enabling with no error attributable to it
   config-overrides   `dotted.key: value` lines are applied to plugins/<Name>/config.yml and
@@ -16,6 +23,8 @@ It asserts, in order:
                      for 5s, no error is attributable to the baseline ("none" when empty)
   baseline-restart   the baseline enables over its own data; every `<n> <label> loaded`
                      line it prints is captured as the reference count for that label
+  fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
+                     logged by the baseline with that count
   fixture            the server is stopped; plugins/<Name> and every extra data path are
                      copied out, listed (size, sha256) and archived; at least one file
   candidate-boot-1   the baseline jar is removed and the candidate deployed; the candidate
@@ -23,7 +32,9 @@ It asserts, in order:
                      failure, no `Could not load` / UnknownDependencyException, no error
                      attributable to it
   counts-1           every label the baseline logged is logged by the candidate with the
-                     same count; labels present on one side only are reported, not failed
+                     same count; labels present on one side only are reported, not failed.
+                     With a supplied fixture, also every label in the manifest's
+                     `expected` with that count
   files-kept-1       every file in the fixture still exists — at its path, or moved into
                      plugins/<Name>/ by a migration; a removed file fails. Added files are
                      reported
@@ -42,6 +53,12 @@ Environment:
   CONFIG_OVERRIDES     newline-separated `dotted.key: value` lines (optional)
   SCENARIO             newline-separated console commands (optional)
   EXTRA_DATA_PATHS     newline-separated server-root-relative glob patterns (optional)
+  FIXTURE_ARCHIVE      path to a fixture tar.gz to boot the baseline over instead of
+                       recording one (optional); entries are server-root-relative, a
+                       single wrapper directory is stripped
+  FIXTURE_MANIFEST     path to that fixture's manifest.json (required with FIXTURE_ARCHIVE)
+  FIXTURE_URL, FIXTURE_MANIFEST_URL
+                       where they came from — recorded in result.json only
   WORK_DIR             where fixture/ and evidence/ are written (default: work)
   REPOSITORY, SHA      recorded in result.json only
   RESULT_PATH          where to write result.json (default: result.json)
@@ -76,8 +93,16 @@ EXPECTED_VERSION = os.getenv("EXPECTED_VERSION") or None
 CONFIG_OVERRIDES = [l.strip() for l in os.getenv("CONFIG_OVERRIDES", "").split("\n") if l.strip()]
 SCENARIO = [l.strip() for l in os.getenv("SCENARIO", "").split("\n") if l.strip()]
 EXTRA_DATA_PATHS = [l.strip() for l in os.getenv("EXTRA_DATA_PATHS", "").split("\n") if l.strip()]
+FIXTURE_ARCHIVE = os.getenv("FIXTURE_ARCHIVE") or None
+FIXTURE_MANIFEST = os.getenv("FIXTURE_MANIFEST") or None
 WORK_DIR = os.getenv("WORK_DIR", "work")
 RESULT_PATH = os.getenv("RESULT_PATH", "result.json")
+
+if FIXTURE_ARCHIVE and not FIXTURE_MANIFEST:
+    sys.exit("FIXTURE_ARCHIVE is set but FIXTURE_MANIFEST is not: a supplied fixture needs its manifest")
+MANIFEST = json.load(open(FIXTURE_MANIFEST)) if FIXTURE_MANIFEST else {}
+# Count per `<label>` that the fixture's manifest says a reload must find.
+EXPECTED = {str(k): int(v) for k, v in (MANIFEST.get("expected") or {}).items()}
 
 _HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 DATA_PATHS = []  # server-root-relative paths the fixture covers, once known
@@ -96,6 +121,19 @@ RESULT = {
     "version": None,
     "passed": False,
     "counts": {},
+    # A supplied fixture: where it came from and what its manifest promises. None when the
+    # gate recorded the fixture itself from the baseline's scenario.
+    "fixture": {
+        "url": os.getenv("FIXTURE_URL") or None,
+        "manifestUrl": os.getenv("FIXTURE_MANIFEST_URL") or None,
+        "sha256": hashlib.sha256(open(FIXTURE_ARCHIVE, "rb").read()).hexdigest(),
+        "kind": MANIFEST.get("kind", "recorded"),
+        "plugin": MANIFEST.get("plugin"),
+        "version": MANIFEST.get("version"),
+        "minecraft": MANIFEST.get("minecraft"),
+        "paths": MANIFEST.get("paths"),
+        "expected": EXPECTED,
+    } if FIXTURE_ARCHIVE else None,
     "fixtureFiles": 0,
     "assertions": [],
     "startedAt": datetime.datetime.now(datetime.timezone.utc).isoformat(),
@@ -401,6 +439,78 @@ def archive(src_dir, tar_path):
         tar.add(src_dir, arcname=os.path.basename(src_dir))
 
 
+def fixture_members():
+    """Server-root-relative entry names in the supplied archive, and how many leading
+    path components to strip: 1 when every entry sits under one wrapper directory that is
+    not itself a data path (the gate's own `fixture.tar.gz` evidence is wrapped in
+    `fixture/`; plugin-fixtures release archives are not wrapped)."""
+    with tarfile.open(FIXTURE_ARCHIVE) as tar:
+        members = tar.getmembers()
+    names = []
+    for m in members:
+        name = m.name[2:] if m.name.startswith("./") else m.name
+        if name in ("", "."):
+            continue
+        if name.startswith("/") or ".." in name.split("/") or m.issym() or m.islnk():
+            record("fixture-unpack", False, f"archive entry {m.name!r} is not a plain server-root-relative path")
+        names.append(name.rstrip("/") + "/" if m.isdir() else name)
+    tops = {n.split("/", 1)[0] for n in names}
+    data_tops = {p.strip("/").split("/", 1)[0] for p in (MANIFEST.get("paths") or [])} | {"plugins"}
+    strip = 0
+    if len(tops) == 1:
+        top = next(iter(tops))
+        if top not in data_tops and any(n.startswith(top + "/") for n in names):
+            strip = 1
+            names = [n[len(top) + 1:] for n in names if n.rstrip("/") != top]
+    return names, strip
+
+
+def unpack_fixture():
+    """Stop the server and unpack the supplied archive into the server root, through the
+    container's own tar so every file is owned by the server's user and stays writable."""
+    if not stop_server("fixture-unpack stop"):
+        record("fixture-unpack", False, "server did not stop within 120s")
+    names, strip = fixture_members()
+    with open(FIXTURE_ARCHIVE, "rb") as f:
+        archive = f.read()
+    ok, _, err = docker_exec("sh", "-c", f"cd {SERVER_ROOT} && tar xzf - --strip-components={strip}", input_bytes=archive)
+    if not ok:
+        record("fixture-unpack", False, f"archive could not be unpacked into the server root: {err}")
+    missing = []
+    for path in MANIFEST.get("paths") or []:
+        ok, _, _ = docker_exec("sh", "-c", f"cd {SERVER_ROOT} && ls -d '{path.strip('/')}'")
+        if not ok:
+            missing.append(path)
+    if missing:
+        record("fixture-unpack", False, f"manifest paths not present after unpacking: {missing}; archive holds {names[:10]}")
+    files = [n for n in names if not n.endswith("/")]
+    record("fixture-unpack", True,
+           f"{len(files)} entr{'y' if len(files) == 1 else 'ies'} from {os.path.basename(FIXTURE_ARCHIVE)} "
+           f"({MANIFEST.get('plugin')} {MANIFEST.get('version')}, {MANIFEST.get('kind', 'recorded')})"
+           + (f", wrapper directory stripped" if strip else "")
+           + f"; manifest paths present: {MANIFEST.get('paths')}")
+
+
+def against_expected(counts):
+    """(mismatched {label: (expected, actual)}, labels expected but not logged)."""
+    mismatched = {l: (EXPECTED[l], counts[l]) for l in EXPECTED if l in counts and counts[l] != EXPECTED[l]}
+    missing = sorted(l for l in EXPECTED if l not in counts)
+    return mismatched, missing
+
+
+def check_fixture_expected(baseline_counts):
+    if not FIXTURE_ARCHIVE:
+        return
+    if not EXPECTED:
+        record("fixture-expected", True, "manifest lists no expected counts")
+        return
+    mismatched, missing = against_expected(baseline_counts)
+    if mismatched or missing:
+        record("fixture-expected", False,
+               f"the baseline does not load what the manifest promises: mismatch (expected, baseline) {mismatched}; not logged {missing}")
+    record("fixture-expected", True, f"baseline logged every expected count: {EXPECTED}")
+
+
 def check_counts(n, baseline_counts, log):
     counts = loaded_counts(log)
     for label, value in counts.items():
@@ -420,6 +530,12 @@ def check_counts(n, baseline_counts, log):
         detail += f"; only candidate logged {only_candidate}"
     if mismatched:
         record(f"counts-{n}", False, "mismatch (baseline, candidate): " + str(mismatched) + "; " + detail)
+    if EXPECTED:
+        exp_mismatched, exp_missing = against_expected(counts)
+        if exp_mismatched or exp_missing:
+            record(f"counts-{n}", False, "mismatch against the manifest (expected, candidate): " + str(exp_mismatched)
+                   + (f"; expected but not logged {exp_missing}" if exp_missing else "") + "; " + detail)
+        detail += "; equals the manifest's expected counts"
     record(f"counts-{n}", True, detail)
 
 
@@ -525,6 +641,9 @@ def main():
     print(f"baseline:  {baseline_name} main={baseline_meta.get('main')} declared-version={baseline_meta.get('version')}")
     print(f"candidate: {plugin_name} main={candidate_meta.get('main')} declared-version={candidate_meta.get('version')}")
     print(f"overrides={CONFIG_OVERRIDES} scenario={SCENARIO} extra_data_paths={EXTRA_DATA_PATHS}")
+    if FIXTURE_ARCHIVE:
+        print(f"fixture:   {os.path.basename(FIXTURE_ARCHIVE)} sha256={RESULT['fixture']['sha256']} "
+              f"{MANIFEST.get('plugin')} {MANIFEST.get('version')} ({MANIFEST.get('kind', 'recorded')}) expected={EXPECTED}")
 
     print("\n[baseline] waiting for the server's first start...")
     if not wait_for(is_running, 600, "baseline server", poll=10):
@@ -537,10 +656,18 @@ def main():
         deploy_jar(dep)
     deploy_jar(BASELINE_JAR)
 
+    if FIXTURE_ARCHIVE:
+        # The supplied fixture goes in before the baseline ever runs, so the baseline's first
+        # boot is already a boot over that data — the proof that the fixture loads on the
+        # current stable release.
+        print("\n[fixture-unpack]")
+        unpack_fixture()
+
     print("\n[baseline-boot]")
-    _, baseline_version = restart_and_enable("baseline-boot", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
+    log, baseline_version = restart_and_enable("baseline-boot", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
     RESULT["baselineVersion"] = baseline_version
-    record("baseline-boot", True, f"{baseline_name} enabled v{baseline_version}")
+    record("baseline-boot", True, f"{baseline_name} enabled v{baseline_version}"
+           + (f" over the supplied fixture; counts {loaded_counts(log)}" if FIXTURE_ARCHIVE else ""))
 
     print("\n[config-overrides]")
     applied = apply_config_overrides(baseline_name)
@@ -557,6 +684,10 @@ def main():
     for label, value in baseline_counts.items():
         RESULT["counts"][label] = [value, None, None]
     record("baseline-restart", True, f"enabled over its own data; counts {baseline_counts}")
+
+    if FIXTURE_ARCHIVE:
+        print("\n[fixture-expected]")
+        check_fixture_expected(baseline_counts)
 
     print("\n[fixture]")
     if not stop_server("fixture stop"):
@@ -582,7 +713,8 @@ def main():
     archive(fixture_dir, os.path.join(WORK_DIR, "evidence", "fixture.tar.gz"))
     if not fixture:
         record("fixture", False, f"nothing captured from {data_paths}")
-    record("fixture", True, f"{len(fixture)} file(s) from {captured}")
+    record("fixture", True, f"{len(fixture)} file(s) from {captured}"
+           + ("; the supplied fixture as the baseline left it" if FIXTURE_ARCHIVE else ""))
 
     print("\n[candidate] swapping the baseline jar for the candidate...")
     ok, _, err = docker_exec("rm", f"{SERVER_ROOT}/plugins/{os.path.basename(BASELINE_JAR)}")

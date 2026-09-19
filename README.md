@@ -15,7 +15,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 |---|---|---|
 | [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
 | [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
-| [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides and console commands — migrates it, and keeps every file and every `<n> <label> loaded` count across its own restart | available |
+| [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides and console commands, or a published fixture such as an anonymised real-world database — migrates it, and keeps every file and every `<n> <label> loaded` count across its own restart | available |
 | [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
 
 ## Boot gate
@@ -122,41 +122,85 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `config_overrides` | no | newline-separated `dotted.key: value` lines applied to `plugins/<Name>/config.yml` after the baseline's first boot (the file is re-serialised, so comments are lost); `<Name>` is the plugin.yml `name:` |
 | `scenario` | no | newline-separated console commands sent to the baseline, about 3 s apart, after the overrides and a restart |
 | `extra_data_paths` | no | newline-separated server-root-relative glob patterns to capture beyond `plugins/<Name>/`, e.g. `medieval_factions_db*` for a plugin whose H2 file sits in the server root |
+| `fixture_url` | no | URL of a fixture `tar.gz` — a [plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures) release asset — to boot the baseline over instead of recording one; see [Supplied fixtures](#supplied-fixtures) |
+| `fixture_manifest_url` | no | URL of that fixture's `manifest.json`; defaults to `manifest.json` beside the archive, which every plugin-fixtures release carries |
 
 Assertions, in order — the run stops at the first failure:
 
-1. **baseline-boot** — dependency jars and the baseline jar are deployed; after a restart the
+1. **fixture-unpack** — only with `fixture_url`: the server is stopped after its first start
+   and the archive is unpacked into the server root as the server's own user (a single
+   wrapper directory, as in the gate's own `fixture.tar.gz` evidence, is stripped); every
+   path the manifest lists must then exist.
+2. **baseline-boot** — dependency jars and the baseline jar are deployed; after a restart the
    baseline logs `Enabling <name> v<version>` with no enable failure and no error attributable
-   to it.
-2. **config-overrides** — the overrides are applied and the baseline enables again over the
+   to it. With a supplied fixture this boot is already over that data.
+3. **config-overrides** — the overrides are applied and the baseline enables again over the
    edited config. Passes with "none" when no overrides were given.
-3. **scenario** — each command is sent over the console; once the console has been quiet for
+4. **scenario** — each command is sent over the console; once the console has been quiet for
    5 s, no error is attributable to the baseline. Passes with "none" when no scenario was given.
-4. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
+5. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
    line it prints during this boot (Medieval Factions prints `3 factions loaded (5ms)`) is
    captured as the reference count for that label.
-5. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
+6. **fixture-expected** — only with `fixture_url`: every label in the manifest's `expected`
+   is logged by the baseline with that count. A stable release that does not load what the
+   fixture promises is a finding about the stable release, and nothing about the candidate
+   can be concluded from it.
+7. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
    `extra_data_paths` are copied out, listed (size and sha256) and archived. At least one file
-   must have been captured.
-6. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
+   must have been captured. With a supplied fixture this is that fixture as the baseline left it.
+8. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
    logs `Enabling <name> v<version>` (equal to `expected_version` when given); no enable
    failure, no `Could not load` / `UnknownDependencyException`, no `ERROR`/`SEVERE` line naming
    the plugin and no stack frame inside its package.
-7. **counts-1** — every label the baseline logged is logged by the candidate with the same
+9. **counts-1** — every label the baseline logged is logged by the candidate with the same
    count. A label that appears on only one side is reported, not failed (plugins change their
-   log lines). Passes with "baseline logged no counts" when there were none.
-8. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
+   log lines). Passes with "baseline logged no counts" when there were none. With a supplied
+   fixture, every label in the manifest's `expected` must also be logged with that count — a
+   label the manifest promises and the candidate no longer logs fails here.
+10. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
    or — a migration — as a byte-identical copy under the same name inside `plugins/<Name>/`.
    A removed file fails; a same-named file with different content does not count as migrated.
    Added files are reported.
-9. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
-10. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
+11. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
+12. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
     the candidate itself wrote.
 
 What it does not prove: anything about data the scenario did not create (an empty scenario
 proves only that the baseline's freshly written defaults load), that a downgrade back to the
 baseline works, or that migrated values are semantically right — only that the files and the
 counts the plugin reports survive.
+
+### Supplied fixtures
+
+A scenario proves the shapes it was written to create. A fixture published by
+[plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures) — in particular a
+*real-world* one, an anonymised database from a live server — proves the shapes a community
+actually produced. With `fixture_url` the gate records nothing: the archive is unpacked into
+the server root before the baseline ever runs, so the baseline's first boot is a boot over
+that data (proof that the fixture still loads on the current stable), the baseline's restart
+fixes the reference counts, those must equal the manifest's `expected`, and the candidate is
+then held to both. `config_overrides`, `scenario` and `extra_data_paths` still apply on top —
+the scenario runs against the fixture's data, and `extra_data_paths` must still name any
+database file that sits outside `plugins/<Name>/`. `result.json` gains
+`fixture: {url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected}` and
+the job summary a `manifest expected` column.
+
+The archive's entries are server-root-relative (`medieval_factions_db.mv.db`,
+`plugins/MedievalFactions/config.yml`); an archive whose entries all sit under one wrapper
+directory that is not itself a data path — the gate's own `fixture.tar.gz` evidence — is
+unwrapped, so a previous run's fixture can be replayed. Symbolic links and paths that escape
+the server root are refused.
+
+```
+gh workflow run save-compat.yml --repo Dans-Plugins/release-gates \
+  -f repository=Dans-Plugins/Medieval-Factions \
+  -f sha=<commit> \
+  -f jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/dev/<jar> \
+  -f baseline_jar_url=https://github.com/Dans-Plugins/Medieval-Factions/releases/download/v5.8.1/<jar> \
+  -f fixture_url=https://github.com/Dans-Plugins/plugin-fixtures/releases/download/medieval-factions/5.8.1-real/medieval-factions-5.8.1-real.tar.gz \
+  -f extra_data_paths='medieval_factions_db*' \
+  -f expected_version=6.0.0
+```
 
 Dispatch by hand:
 
@@ -250,7 +294,7 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 - Save-compatibility gate: `save-compat-<run id>` —
-  `{gate, repository, sha, plugin, baselineVersion, version, passed, counts: {label: [baseline, candidate 1, candidate 2]}, fixtureFiles, assertions}`
+  `{gate, repository, sha, plugin, baselineVersion, version, passed, counts: {label: [baseline, candidate 1, candidate 2]}, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected), fixtureFiles, assertions}`
   plus `fixture.tar.gz` (what the baseline wrote), `fixture-listing.json` and
   `candidate-data.tar.gz` (the same paths after the candidate's last boot).
 - Dependents gate: `dependents-<run id>` —
