@@ -13,7 +13,8 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 
 | Workflow | Proves | Status |
 |---|---|---|
-| [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, stops cleanly, and enables again over the data folder it wrote | available |
+| [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
+| [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
 | `save-compat.yml` | The candidate loads a fixture recorded by the previous stable release ([plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) without loss | planned |
 | `dependents.yml` | Every plugin that depends on the candidate still boots against it | planned |
 
@@ -36,8 +37,9 @@ Assertions, in order — the run stops at the first failure:
 2. **boot-1** — the server reaches `Done`; the candidate logs `Enabling <name> v<version>`; no enable failure; no `ERROR`/`SEVERE` line naming the plugin and no stack frame inside its package.
 3. **version** — the enabled version equals `expected_version` (when given).
 4. **plugins-1** — `plugins` lists the candidate.
-5. **stop-1** — the server stops within two minutes with no error attributable to the plugin.
-6. **boot-2**, **plugins-2**, **stop-2** — the same, booted over the data folder the first boot created. A plugin that writes a file it cannot read back fails here.
+5. **commands-1** — for every command under `commands:` in the candidate's `plugin.yml`, `help <command>` is answered with a help topic within 20 seconds and not with `No help for` / `Unknown command`. A plugin with no commands passes with "no commands declared".
+6. **stop-1** — the server stops within two minutes with no error attributable to the plugin.
+7. **boot-2**, **plugins-2**, **commands-2**, **stop-2** — the same, booted over the data folder the first boot created. A plugin that writes a file it cannot read back fails here.
 
 Dispatch by hand:
 
@@ -61,12 +63,51 @@ jobs:
       jar_url: https://github.com/${{ github.repository }}/releases/download/dev/MyPlugin.jar
 ```
 
+## Install gate
+
+Proves what an operator gets: the current stable release of Dan's Plugin Manager is deployed
+on a fresh server, `dpm get <slug>` is sent over the console for each slug, and the server is
+restarted so the downloaded jars enable. Nothing is downloaded by the harness itself — DPM
+resolves each slug to its repository's `/releases/latest` exactly as it does on a live server.
+
+Inputs, identical for `workflow_dispatch` and `workflow_call`:
+
+| Input | Required | Meaning |
+|---|---|---|
+| `plugins` | yes | comma-separated DPM slugs, as listed by `/dpm list` (e.g. `easylinks,herald`) |
+| `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+
+Assertions, in order:
+
+1. **dpm** — the server reaches `Done` with Dan's Plugin Manager enabled (fatal).
+2. **get-<slug>** — `dpm get <slug>` reports `Downloaded` (or `already up to date`) rather than
+   `Plugin not found`, a GitHub error, or no release; and the jar DPM wrote to `plugins/<slug>.jar`
+   carries a readable `plugin.yml`, from which the plugin's real name is taken.
+3. **boot** — the server reaches `Done` over the plugins DPM installed (fatal).
+4. **enable-<slug>** — the plugin logs `Enabling <name> v<version>`; no enable failure; no
+   `ERROR`/`SEVERE` line naming it and no stack frame inside its package.
+5. **stop** — the server stops within two minutes with no error attributable to any of them.
+
+Unlike the boot gate, the per-plugin assertions run to completion: one slug DPM cannot find
+does not hide whether the others install. The gate passes only when every assertion holds.
+
+Dispatch by hand:
+
+```
+gh workflow run dpm-install.yml --repo Dans-Plugins/release-gates \
+  -f plugins=easylinks,foodspoilage,herald
+```
+
 ## Evidence
 
-Every run uploads an artifact `boot-gate-<run id>` containing `result.json`
-(`{gate, repository, sha, plugin, version, passed, assertions: [{name, passed, detail}]}`),
-`server.log` (the full console), and the plugin's data folder. The job summary shows the
-assertion table.
+Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `server.log`
+(the full console). The job summary shows the assertion table.
+
+- Boot gate: `boot-gate-<run id>` —
+  `{gate, repository, sha, plugin, version, passed, assertions: [{name, passed, detail}]}`
+  plus the plugin's data folder.
+- Install gate: `dpm-install-<run id>` —
+  `{gate, dpm, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 
 ## Design notes
 
