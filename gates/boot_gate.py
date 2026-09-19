@@ -10,9 +10,12 @@ Dan's Plugin Manager's integration test uses) and reads the server's console fro
                  no ERROR/SEVERE line or stack frame attributable to the candidate
   version        the version the candidate enables with is the one expected (when given)
   plugins-1      `plugins` lists the candidate
+  commands-1     `help <command>` for every command in plugin.yml is answered with a help
+                 topic, not "No help for" / "Unknown command"
   stop-1         the server stops within the timeout and the candidate disables without error
   boot-2         a second boot over the data folder the first boot created; same checks
   plugins-2
+  commands-2
   stop-2
 
 It stops at the first assertion that fails, writes `result.json`, and exits non-zero.
@@ -152,6 +155,10 @@ def read_plugin_yml(jar_path):
 
 ERROR_LINE = re.compile(r"/(ERROR|SEVERE)\]")
 DONE_LINE = re.compile(r"Done \([\d.]+s\)!")
+# Bukkit's HelpCommand answers `help <topic>` with a "Help: /<topic>" header when the
+# topic exists and "No help for <topic>" when it does not.
+HELP_MISSING = re.compile(r"No help for \S+|Unknown command")
+HELP_ANSWERED = re.compile(r"Help: |No help for \S+|Unknown command")
 
 
 def attributable_errors(log, plugin_name, package_prefix):
@@ -165,7 +172,7 @@ def attributable_errors(log, plugin_name, package_prefix):
     return hits
 
 
-def boot(n, plugin_name, package_prefix):
+def boot(n, plugin_name, package_prefix, commands):
     cursor = now_cursor()
     _api("POST", "/api/server/start")
     if not wait_for(lambda: DONE_LINE.search(logs_since(cursor)) is not None, 300, f"boot {n} Done"):
@@ -201,6 +208,30 @@ def boot(n, plugin_name, package_prefix):
     listed = wait_for(lambda: plugin_name in logs_since(cursor), 30, "plugins output", poll=3)
     record(f"plugins-{n}", listed, "" if listed else f"'plugins' output does not mention {plugin_name}")
 
+    help_commands(n, commands)
+
+
+def help_commands(n, commands):
+    """Every command the candidate declares must be known to the server's help map."""
+    if not commands:
+        record(f"commands-{n}", True, "no commands declared")
+        return
+    problems = []
+    for cmd in commands:
+        cursor = now_cursor()
+        send_command(f"help {cmd}")
+        answered = wait_for(lambda: HELP_ANSWERED.search(logs_since(cursor)) is not None, 20, f"help {cmd}", poll=2)
+        missing = HELP_MISSING.search(logs_since(cursor))
+        if missing:
+            problems.append(f"help {cmd}: {missing.group(0)}")
+        elif not answered:
+            problems.append(f"help {cmd}: no help output within 20s")
+    record(
+        f"commands-{n}",
+        not problems,
+        f"{len(commands)} command(s): {commands}" if not problems else "; ".join(problems),
+    )
+
 
 def stop(n, plugin_name, package_prefix):
     cursor = now_cursor()
@@ -225,8 +256,9 @@ def main():
     plugin_name = meta.get("name")
     main_class = meta.get("main") or ""
     package_prefix = main_class.rsplit(".", 1)[0] if "." in main_class else main_class
+    commands = list((meta.get("commands") or {}).keys())
     RESULT["plugin"] = plugin_name
-    print(f"candidate: {plugin_name} main={main_class} declared-version={meta.get('version')}")
+    print(f"candidate: {plugin_name} main={main_class} declared-version={meta.get('version')} commands={commands}")
 
     supplied = {}
     for dep in DEPENDENCY_JARS:
@@ -257,7 +289,7 @@ def main():
 
     for n in (1, 2):
         print(f"\n[boot {n}]")
-        boot(n, plugin_name, package_prefix)
+        boot(n, plugin_name, package_prefix, commands)
         print(f"\n[stop {n}]")
         stop(n, plugin_name, package_prefix)
 
