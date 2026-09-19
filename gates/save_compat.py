@@ -88,6 +88,9 @@ RESULT = {
     "sha": os.getenv("SHA"),
     "baseline": os.path.basename(BASELINE_JAR),
     "candidate": os.path.basename(CANDIDATE_JAR),
+    # The release automation publishes the exact bytes that passed: it verifies this digest
+    # against the jar it uploads, so a rebuilt `dev` between gate and release cannot slip in.
+    "candidateSha256": __import__("hashlib").sha256(open(CANDIDATE_JAR, "rb").read()).hexdigest(),
     "plugin": None,
     "baselineVersion": None,
     "version": None,
@@ -416,13 +419,16 @@ def check_counts(n, baseline_counts, log):
 def check_files_kept(n, fixture, data_paths, plugin_name):
     _, after = capture(os.path.join(WORK_DIR, f"after-{n}"), data_paths)
     data_folder = f"plugins/{plugin_name}/"
-    in_data_folder = {p.rsplit("/", 1)[-1] for p in after if p.startswith(data_folder)}
+    # A file counts as migrated only if a byte-identical copy now sits in the plugin's own
+    # folder (same name, same sha256). A same-named file with different content is not the
+    # operator's data — that case is reported as missing.
+    in_data_folder = {(p.rsplit("/", 1)[-1], meta["sha256"]) for p, meta in after.items() if p.startswith(data_folder)}
     missing, migrated, changed = [], [], []
     for path, meta in fixture.items():
         if path in after:
             if after[path]["sha256"] != meta["sha256"]:
                 changed.append(path)
-        elif not path.startswith(data_folder) and path.rsplit("/", 1)[-1] in in_data_folder:
+        elif not path.startswith(data_folder) and (path.rsplit("/", 1)[-1], meta["sha256"]) in in_data_folder:
             migrated.append(path)
         else:
             missing.append(path)

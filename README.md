@@ -145,9 +145,10 @@ Assertions, in order — the run stops at the first failure:
 7. **counts-1** — every label the baseline logged is logged by the candidate with the same
    count. A label that appears on only one side is reported, not failed (plugins change their
    log lines). Passes with "baseline logged no counts" when there were none.
-8. **files-kept-1** — every file in the fixture still exists: at its path, or — a migration —
-   under the same name inside `plugins/<Name>/`. Size and content may change; a removed file
-   fails. Added files are reported.
+8. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
+   or — a migration — as a byte-identical copy under the same name inside `plugins/<Name>/`.
+   A removed file fails; a same-named file with different content does not count as migrated.
+   Added files are reported.
 9. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` appeared anywhere under the server root and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked.
 10. **candidate-boot-2**, **counts-2**, **files-kept-2**, **stop-2** — the same, over the data
     the candidate itself wrote.
@@ -176,7 +177,7 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 (the full console). The job summary shows the assertion table.
 
 - Boot gate: `boot-gate-<run id>` —
-  `{gate, repository, sha, plugin, version, passed, assertions: [{name, passed, detail}]}`
+  `{gate, repository, sha, plugin, version, candidateSha256, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
   plus the plugin's data folder.
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.

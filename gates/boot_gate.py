@@ -58,6 +58,9 @@ RESULT = {
     "repository": os.getenv("REPOSITORY"),
     "sha": os.getenv("SHA"),
     "candidate": os.path.basename(CANDIDATE_JAR),
+    # The release automation publishes the exact bytes that passed: it verifies this digest
+    # against the jar it uploads, so a rebuilt `dev` between gate and release cannot slip in.
+    "candidateSha256": __import__("hashlib").sha256(open(CANDIDATE_JAR, "rb").read()).hexdigest(),
     "plugin": None,
     "version": None,
     "passed": False,
