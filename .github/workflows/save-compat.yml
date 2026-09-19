@@ -73,11 +73,13 @@ on:
         required: false
         type: string
         default: ""
-      # workflow_dispatch allows ten inputs and this is the tenth: the manifest is not a
-      # separate input but `manifest.json` beside the archive, as every plugin-fixtures
-      # release carries it.
       fixture_url:
-        description: "URL of a fixture tar.gz (a plugin-fixtures release asset) to boot the baseline over instead of recording one; its manifest.json is fetched from beside it (optional)"
+        description: "URL of a fixture tar.gz (a plugin-fixtures release asset) to boot the baseline over instead of recording one (optional)"
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
+        description: "URL of that fixture's manifest.json; defaults to manifest.json beside the archive, as every plugin-fixtures release carries it"
         required: false
         type: string
         default: ""
@@ -120,6 +122,10 @@ on:
         type: string
         default: ""
       fixture_url:
+        required: false
+        type: string
+        default: ""
+      fixture_manifest_url:
         required: false
         type: string
         default: ""
@@ -183,7 +189,8 @@ jobs:
           set -euo pipefail
           mkdir -p work/fixture-input
           url="${{ inputs.fixture_url }}"
-          manifest_url="${url%/*}/manifest.json"
+          manifest_url="${{ inputs.fixture_manifest_url }}"
+          manifest_url="${manifest_url:-${url%/*}/manifest.json}"
           curl -fsSL -o work/fixture-input/fixture.tar.gz "$url"
           tar tzf work/fixture-input/fixture.tar.gz >/dev/null
           curl -fsSL -o work/fixture-input/manifest.json "$manifest_url"
