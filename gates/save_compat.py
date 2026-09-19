@@ -954,6 +954,12 @@ def migration_roundtrip(plugin_name, package_prefix, jar_basename, baseline_coun
         leg["storageLine"] = m.group(0) if m else None
         if m and m.group(1).lower() != dst:
             record(name, False, f"{src}→{dst}: after the switch the plugin reports {m.group(0)!r}")
+        if dst == "json":
+            # The JSON store the migration created is part of what the candidate leaves
+            # behind, so the final evidence capture includes it.
+            for p in expand_globs([json_store_path(plugin_name)]):
+                if p not in DATA_PATHS:
+                    DATA_PATHS.append(p)
         counts = loaded_counts(log)
         leg["counts"] = counts
         mismatched, cdetail = compare_counts(baseline_counts, counts)
