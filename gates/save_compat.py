@@ -27,10 +27,14 @@ It asserts, in order:
   baseline-restart   the baseline enables over its own data; every `<n> <label> loaded`
                      line it prints is captured as the reference count for that label
   bot-scenario-counts
-                     the counts the script said to expect match the baseline's restart
-                     counts ("none" when no script)
+                     the counts the script said to expect match what the scenario ADDED —
+                     the baseline's restart counts minus what its first boot loaded (zero on
+                     a fresh server; the fixture's contents when one was supplied) — so a
+                     script that creates two factions over a fixture holding fourteen expects
+                     2, not 16 ("none" when no script)
   fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
-                     logged by the baseline with that count
+                     logged by the baseline's first boot over the fixture with that count,
+                     before any scenario has added to it
   fixture            the server is stopped; plugins/<Name> and every extra data path are
                      copied out, listed (size, sha256) and archived; at least one file
   candidate-boot-1   the baseline jar is removed and the candidate deployed; the candidate
@@ -1034,8 +1038,18 @@ def main():
     print("\n[baseline-boot]")
     log, baseline_version = restart_and_enable("baseline-boot", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
     RESULT["baselineVersion"] = baseline_version
+    # What the baseline holds before any scenario runs: the supplied fixture's contents, or
+    # zeroes on a fresh server. The scenario checks below are judged as deltas over this.
+    initial_counts = loaded_counts(log)
+    RESULT["initialCounts"] = initial_counts
     record("baseline-boot", True, f"{baseline_name} enabled v{baseline_version}"
-           + (f" over the supplied fixture; counts {loaded_counts(log)}" if FIXTURE_ARCHIVE else ""))
+           + (f" over the supplied fixture; counts {initial_counts}" if FIXTURE_ARCHIVE else ""))
+
+    if FIXTURE_ARCHIVE:
+        # Judged on the first boot over the fixture — before the scenario adds to it — because
+        # that boot is the proof that the stable release loads what the manifest promises.
+        print("\n[fixture-expected]")
+        check_fixture_expected(initial_counts)
 
     print("\n[config-overrides]")
     applied = apply_config_overrides(baseline_name)
@@ -1058,11 +1072,7 @@ def main():
     for label, value in baseline_counts.items():
         RESULT["counts"][label] = [value] + [None] * (RESTART_CYCLES + 1)
     record("baseline-restart", True, f"enabled over its own data; counts {baseline_counts}")
-    scenario_runner.check_expected_counts(record, RESULT, baseline_counts)  # bot scenario, see above
-
-    if FIXTURE_ARCHIVE:
-        print("\n[fixture-expected]")
-        check_fixture_expected(baseline_counts)
+    scenario_runner.check_expected_counts(record, RESULT, baseline_counts, initial_counts)  # bot scenario, see above
 
     print("\n[fixture]")
     if not stop_server("fixture stop"):
