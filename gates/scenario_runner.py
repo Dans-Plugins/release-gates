@@ -143,8 +143,11 @@ def run_bot_scenario(record, result, work_dir, container, plugin_name, package_p
            + (f"; expects {expected}" if expected else "; no SCENARIO_EXPECTED line"))
 
 
-def check_expected_counts(record, result, baseline_counts):
-    """Record `bot-scenario-counts`: the baseline's restart counts match what the script expects."""
+def check_expected_counts(record, result, baseline_counts, initial_counts=None):
+    """Record `bot-scenario-counts`: what the script said it would create equals what the
+    baseline's restart counts gained over `initial_counts` — the counts its first boot
+    loaded (zero on a fresh server; the supplied fixture's contents otherwise). A script's
+    SCENARIO_EXPECTED describes what the script creates, not the whole store."""
     expected = result.get("scenarioExpected")
     if not SCRIPT_URL:
         record("bot-scenario-counts", True, "none")
@@ -152,12 +155,14 @@ def check_expected_counts(record, result, baseline_counts):
     if not expected:
         record("bot-scenario-counts", True, "script printed no SCENARIO_EXPECTED line; nothing to compare")
         return
-    mismatched = {l: (expected[l], baseline_counts[l]) for l in expected if l in baseline_counts and baseline_counts[l] != expected[l]}
+    initial = initial_counts or {}
+    added = {l: baseline_counts[l] - initial.get(l, 0) for l in expected if l in baseline_counts}
+    mismatched = {l: (expected[l], added[l]) for l in added if added[l] != expected[l]}
     not_logged = sorted(l for l in expected if l not in baseline_counts)
-    matched = {l: baseline_counts[l] for l in expected if l in baseline_counts and l not in mismatched}
-    detail = f"matched {matched}"
+    matched = {l: added[l] for l in added if l not in mismatched}
+    detail = f"added by the scenario {matched}" + (f" over the fixture's {initial}" if any(initial.values()) else "")
     if not_logged:
         detail += f"; not logged by the baseline {not_logged}"
     if mismatched:
-        record("bot-scenario-counts", False, "mismatch (expected, baseline): " + str(mismatched) + "; " + detail)
+        record("bot-scenario-counts", False, "mismatch (expected, added): " + str(mismatched) + "; " + detail)
     record("bot-scenario-counts", True, detail)

@@ -155,11 +155,13 @@ Assertions, in order — the run stops at the first failure:
 5. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
    line it prints during this boot (Medieval Factions prints `3 factions loaded (5ms)`) is
    captured as the reference count for that label. Then **bot-scenario-counts** — the counts
-   the script said to expect (its `SCENARIO_EXPECTED` line) match those reference counts,
-   label by label; a label the baseline does not log is reported. Passes with "none" when no
-   script was given.
-6. **fixture-expected** — only with `fixture_url`: every label in the manifest's `expected`
-   is logged by the baseline with that count. A stable release that does not load what the
+   the script said to expect (its `SCENARIO_EXPECTED` line) match what the scenario *added*:
+   those reference counts minus what the baseline's first boot loaded (zero on a fresh
+   server, the fixture's contents when `fixture_url` was given), label by label; a label the
+   baseline does not log is reported. Passes with "none" when no script was given.
+6. **fixture-expected** — only with `fixture_url`, and judged on the baseline's *first* boot
+   over the fixture (step 3, before any scenario adds to it): every label in the manifest's
+   `expected` is logged by the baseline with that count. A stable release that does not load what the
    fixture promises is a finding about the stable release, and nothing about the candidate
    can be concluded from it.
 7. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
