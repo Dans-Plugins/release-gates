@@ -560,11 +560,23 @@ def unpack_fixture():
            + f"; manifest paths present: {MANIFEST.get('paths')}")
 
 
-def against_expected(counts):
-    """(mismatched {label: (expected, actual)}, labels expected but not logged)."""
-    mismatched = {l: (EXPECTED[l], counts[l]) for l in EXPECTED if l in counts and counts[l] != EXPECTED[l]}
-    missing = sorted(l for l in EXPECTED if l not in counts)
+def against_expected(counts, added=None):
+    """(mismatched {label: (expected, actual)}, labels expected but not logged). `added` is
+    what the scenario put on top of the supplied fixture (per label); the promise a later
+    boot must keep is the manifest's count plus that."""
+    added = added or {}
+    promised = {l: v + added.get(l, 0) for l, v in EXPECTED.items()}
+    mismatched = {l: (promised[l], counts[l]) for l in promised if l in counts and counts[l] != promised[l]}
+    missing = sorted(l for l in promised if l not in counts)
     return mismatched, missing
+
+
+def scenario_added():
+    """Per label, what the baseline's reference counts hold beyond its first boot over the
+    fixture — the scenario's additions; empty when nothing was added or no fixture was given."""
+    initial = RESULT.get("initialCounts") or {}
+    reference = RESULT.get("referenceCounts") or {}
+    return {l: reference[l] - initial.get(l, 0) for l in reference if reference[l] != initial.get(l, 0)}
 
 
 def check_fixture_expected(baseline_counts):
@@ -599,11 +611,12 @@ def compare_counts(baseline_counts, counts):
 
 
 def expected_problem(counts):
-    """A supplied fixture's manifest promise, checked against one boot's counts: the
-    failure text, or None when every expected label was logged with its count."""
+    """A supplied fixture's manifest promise — plus whatever the scenario added on top of
+    it — checked against one candidate boot's counts: the failure text, or None when every
+    expected label was logged with its count."""
     if not EXPECTED:
         return None
-    exp_mismatched, exp_missing = against_expected(counts)
+    exp_mismatched, exp_missing = against_expected(counts, scenario_added())
     if exp_mismatched or exp_missing:
         return ("mismatch against the manifest (expected, candidate): " + str(exp_mismatched)
                 + (f"; expected but not logged {exp_missing}" if exp_missing else ""))
@@ -621,7 +634,8 @@ def check_counts(n, baseline_counts, log):
     if problem:
         record(f"counts-{n}", False, problem + "; " + detail)
     if EXPECTED:
-        detail += "; equals the manifest's expected counts"
+        added = scenario_added()
+        detail += "; equals the manifest's expected counts" + (f" plus the scenario's {added}" if added else "")
     record(f"counts-{n}", True, detail)
 
 
@@ -1069,6 +1083,7 @@ def main():
     print("\n[baseline-restart]")
     log, _ = restart_and_enable("baseline-restart", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
     baseline_counts = loaded_counts(log)
+    RESULT["referenceCounts"] = baseline_counts
     for label, value in baseline_counts.items():
         RESULT["counts"][label] = [value] + [None] * (RESTART_CYCLES + 1)
     record("baseline-restart", True, f"enabled over its own data; counts {baseline_counts}")

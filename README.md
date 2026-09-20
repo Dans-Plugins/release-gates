@@ -175,8 +175,9 @@ Assertions, in order — the run stops at the first failure:
 9. **counts-1** — every label the baseline logged is logged by the candidate with the same
    count. A label that appears on only one side is reported, not failed (plugins change their
    log lines). Passes with "baseline logged no counts" when there were none. With a supplied
-   fixture, every label in the manifest's `expected` must also be logged with that count — a
-   label the manifest promises and the candidate no longer logs fails here.
+   fixture, every label in the manifest's `expected` must also be logged with that count plus
+   whatever the scenario added on top of the fixture (step 5's delta) — a label the manifest
+   promises and the candidate no longer logs fails here.
 10. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
    or — a migration — as a byte-identical copy under the same name inside `plugins/<Name>/`.
    A removed file fails; a same-named file with different content does not count as migrated.
