@@ -361,15 +361,17 @@ Assertions, in order:
    another dependent. A dependent whose other dependency was not supplied is reported as
    `skipped: dependency [...] not supplied` and not deployed — the candidate did not break
    it, the caller did not supply it.
-2. **enable-<Name>-baseline**, **control** — only with `baseline_jar_url`: the stable jar and
-   every installed dependent are booted together first. Each **enable-<Name>-baseline** is
+2. **boot-control**, **enable-<Name>-baseline**, **control** — only with `baseline_jar_url`:
+   the stable jar and every installed dependent are booted together first, and
+   **boot-control** is that boot reaching `Done` (fatal). Each **enable-<Name>-baseline** is
    the same check as step 5 against the stable; it is informational — a failure is recorded
    as passed with `PRE-EXISTING against the current stable` and marks the dependent
    pre-existing. **control** then summarises which dependents enable against the stable; it
    fails the run only when the server will not stop or the stable jar cannot be removed.
    Trace files present after the control phase are recorded as `baselineCloseFailure`.
-3. **boot-1** — the server reaches `Done` (fatal). A server that never starts, or does not
-   stop after its own first start, also fails here.
+3. **boot-1** — the server reaches `Done` (fatal). A server that never starts or never
+   reaches `Done` on its own first start — before anything is deployed, so ahead of step 2 —
+   or does not stop before the candidate boots is also recorded as a failed **boot-1**.
 4. **candidate-enabled-1** — the candidate logs `Enabling <name> v<version>` (equal to
    `expected_version` when given); no enable failure, no `Could not load`, no
    `ERROR`/`SEVERE` line naming it and no stack frame inside its package. Fatal: with the
