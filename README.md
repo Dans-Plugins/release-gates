@@ -34,12 +34,16 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 Assertions, in order — the run stops at the first failure:
 
 1. **dependencies** — every `depend:` in the candidate's `plugin.yml` is satisfied by a supplied jar.
-2. **boot-1** — the server reaches `Done`; the candidate logs `Enabling <name> v<version>`; no enable failure; no `ERROR`/`SEVERE` line naming the plugin and no stack frame inside its package.
+2. **boot-1** — the server reaches `Done`; the candidate logs `Enabling <name> v<version>`; no `Error occurred while enabling <name>`, `Could not load 'plugins/<jar>'`, `UnknownDependencyException` or `Disabling <name>` line; no `ERROR`/`SEVERE` line naming the plugin and no stack frame inside its package.
 3. **version** — the enabled version equals `expected_version` (when given).
 4. **plugins-1** — `plugins` lists the candidate.
 5. **commands-1** — for every command under `commands:` in the candidate's `plugin.yml`, `help <command>` is answered with a help topic within 20 seconds and not with `No help for` / `Unknown command`. A plugin with no commands passes with "no commands declared".
 6. **stop-1** — the server stops within two minutes with no error attributable to the plugin.
 7. **boot-2**, **plugins-2**, **commands-2**, **stop-2** — the same, booted over the data folder the first boot created. A plugin that writes a file it cannot read back fails here.
+
+Between **dependencies** and **boot-1** the jars are deployed onto the server's own first
+start; a server that never starts, never reaches `Done` or does not stop before the candidate
+boots fails as **baseline** — an image or runner problem, not the candidate's.
 
 Dispatch by hand:
 
@@ -85,12 +89,17 @@ Assertions, in order:
    `Plugin not found`, a GitHub error, or no release; and the jar DPM wrote to `plugins/<slug>.jar`
    carries a readable `plugin.yml`, from which the plugin's real name is taken.
 3. **boot** — the server reaches `Done` over the plugins DPM installed (fatal).
-4. **enable-<slug>** — the plugin logs `Enabling <name> v<version>`; no enable failure; no
-   `ERROR`/`SEVERE` line naming it and no stack frame inside its package.
+4. **enable-<slug>** — the plugin logs `Enabling <name> v<version>`; no
+   `Error occurred while enabling <name>`, `Could not load 'plugins/<slug>.jar'` or
+   `Disabling <name>` line and no `UnknownDependencyException` for `<slug>.jar`; no
+   `ERROR`/`SEVERE` line naming it and no stack frame inside its package. A slug whose
+   **get-<slug>** failed fails here too, as `skipped: not installed`.
 5. **stop** — the server stops within two minutes with no error attributable to any of them.
 
 Unlike the boot gate, the per-plugin assertions run to completion: one slug DPM cannot find
 does not hide whether the others install. The gate passes only when every assertion holds.
+Before **dpm**, a server that never starts, never reaches `Done` or does not stop before DPM
+boots fails as **baseline** (fatal) — an image or runner problem, not the plugins'.
 
 Dispatch by hand:
 
@@ -183,7 +192,7 @@ Assertions, in order — the run stops at the first failure:
    A removed file fails; a same-named file with different content does not count as migrated.
    Added files are reported. On a database backend `db-dump.sql` is re-dumped and tracked like
    any other file: it must still be producible, and its content is expected to change.
-11. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked. An external database leaves no trace file; the console lines are still checked.
+11. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` / `File corrupted while reading record` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked. An external database leaves no trace file; the console lines are still checked.
 12. **candidate-boot-k**, **counts-k**, **files-kept-k**, **stop-k** for k = 2 … `restart_cycles` + 1
     — the same, over the data the candidate itself wrote, one full stop/start cycle per k.
 13. **migration-roundtrip** (`backend: json` only) — the candidate is booted on the store it
@@ -352,23 +361,38 @@ Assertions, in order:
    another dependent. A dependent whose other dependency was not supplied is reported as
    `skipped: dependency [...] not supplied` and not deployed — the candidate did not break
    it, the caller did not supply it.
-2. **boot-1** — the server reaches `Done` (fatal).
-3. **candidate-enabled-1** — the candidate logs `Enabling <name> v<version>` (equal to
+2. **enable-<Name>-baseline**, **control** — only with `baseline_jar_url`: the stable jar and
+   every installed dependent are booted together first. Each **enable-<Name>-baseline** is
+   the same check as step 5 against the stable; it is informational — a failure is recorded
+   as passed with `PRE-EXISTING against the current stable` and marks the dependent
+   pre-existing. **control** then summarises which dependents enable against the stable; it
+   fails the run only when the server will not stop or the stable jar cannot be removed.
+   Trace files present after the control phase are recorded as `baselineCloseFailure`.
+3. **boot-1** — the server reaches `Done` (fatal). A server that never starts, or does not
+   stop after its own first start, also fails here.
+4. **candidate-enabled-1** — the candidate logs `Enabling <name> v<version>` (equal to
    `expected_version` when given); no enable failure, no `Could not load`, no
    `ERROR`/`SEVERE` line naming it and no stack frame inside its package. Fatal: with the
    candidate down nothing about its dependents can be concluded.
-4. **enable-<Name>-1** — for every installed dependent: it logs `Enabling <Name> v…`; no
+5. **enable-<Name>-1** — for every installed dependent: it logs `Enabling <Name> v…`; no
    `Error occurred while enabling <Name>`; no `Could not load 'plugins/<jar>'` /
-   `UnknownDependencyException`; no `ERROR`/`SEVERE` line naming it and no stack frame
-   inside its package. The exception line Bukkit prints after an enable failure
-   (`NoClassDefFoundError`, `NoSuchMethodError`…) is quoted in the detail — it names the
-   symbol the candidate no longer carries.
-5. **stop-1** — the server stops within two minutes with no error attributable to the
-   candidate or any dependent, **and the database closed cleanly**: no `*.trace.db`
-   appeared under the server root and the console has no `zip file closed` /
-   `MVStoreException` / `OnExitDatabaseCloser` line, the same check as the
-   save-compatibility gate.
-6. **boot-2**, **candidate-enabled-2**, **enable-<Name>-2**, **stop-2** — the same, over
+   `UnknownDependencyException`; no `Disabling <Name>`; no `ERROR`/`SEVERE` line naming it
+   and no stack frame inside its package. The exception line Bukkit prints after an enable
+   failure (`NoClassDefFoundError`, `NoSuchMethodError`…) is quoted in the detail — it names
+   the symbol the candidate no longer carries. A dependent the control phase marked
+   pre-existing passes with `PRE-EXISTING (also fails against the current stable; not a
+   regression)` in front of the failure.
+6. **stop-1** — the server stops within two minutes with no error attributable to the
+   candidate or any dependent, **and the database closed cleanly**: no `*.trace.db` under
+   the server root that is new or has grown since the control phase (any trace file at all
+   when there was no control phase) and the console has no `zip file closed` / `MVStoreException` /
+   `OnExitDatabaseCloser` / `File corrupted while reading record` line, the same check as
+   the save-compatibility gate. The offending trace files are kept under `trace-files/` in
+   the evidence. When a pre-existing dependent is installed, a close failure is reported
+   (`closeFailureWithBrokenDependents`) but passes — a dependent that never enabled can
+   leave a shared database open; the candidate's own close is the save-compatibility gate's
+   to prove.
+7. **boot-2**, **candidate-enabled-2**, **enable-<Name>-2**, **stop-2** — the same, over
    the data folders the first boot wrote.
 
 The per-dependent assertions run to completion: one dependent that breaks does not hide
@@ -396,21 +420,26 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 (the full console). The job summary shows the assertion table.
 
 - Boot gate: `boot-gate-<run id>` —
-  `{gate, repository, sha, plugin, version, candidateSha256, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
+  `{gate, repository, sha, candidate, plugin, version, candidateSha256, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
   plus the plugin's data folder.
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 - Save-compatibility gate: `save-compat-<run id>` —
   `{gate, repository, sha, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
-  (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran)
+  (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran, and
+  `baselineCloseFailure` when the baseline left a trace file on its own shutdowns)
   plus `fixture.tar.gz` (what the baseline wrote — on a database backend including
   `db-dump.sql`), `fixture-listing.json`, `candidate-data.tar.gz` (the same paths after the
   candidate's last boot), `db.log` (the database container's log), `bot-scenario.log` /
-  `bot-scenario.json` (the script's own evidence, with a bot scenario) and, for a `json` run,
+  `bot-scenario.json` (the script's own evidence, with a bot scenario), `trace-files/` (every
+  trace file a stop check blamed on the candidate) and, for a `json` run,
   `migrationRoundtrip: {start, legs: [{from, to, migration, storageLine, counts, countsDetail, cleared}]}`
   in the result and `roundtrip-cleared-<store>.tar.gz` (the store emptied before the second leg).
 - Dependents gate: `dependents-<run id>` —
-  `{gate, repository, sha, plugin, version, candidateSha256, dependents: [{repository, name, version, tag, jar, installed, enabled_1, enabled_2, skipped}], passed, assertions}`.
+  `{gate, repository, sha, candidate, plugin, version, candidateSha256, dependents: [{repository, name, version, tag, jar, installed, enabled_baseline, enabled_1, enabled_2, pre_existing, skipped}], preExisting, passed, assertions}`
+  (plus `baselineCloseFailure` when the control phase left a trace file, and
+  `closeFailureWithBrokenDependents` when a close failure was excused by a pre-existing
+  dependent) and `trace-files/` (every trace file a stop check blamed).
 
 ## Design notes
 
