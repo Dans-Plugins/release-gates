@@ -113,13 +113,13 @@ Add it to the plugin's build job, after the jar is built, pinned to a tag:
       - name: Check Bukkit API use against every supported Minecraft version
         run: |
           curl -fsSL -o /tmp/check_api_compat.py \
-            https://raw.githubusercontent.com/Dans-Plugins/release-gates/v11/gates/check_api_compat.py
+            https://raw.githubusercontent.com/Dans-Plugins/release-gates/v12/gates/check_api_compat.py
           python3 /tmp/check_api_compat.py --versions minecraft-versions.json target build/libs
 ```
 
 `target build/libs` covers Maven and Gradle: directories that do not exist are skipped, and
 exactly one plugin jar (one with a `plugin.yml`, not `original-*`, `-sources`, `-javadoc` or
-`-plain`) must be found. `--exclude a/b/` skips another package; use it only for code that
+`-plain`) must be found; beside Gradle's thin jar, the single shaded `-all` jar is the one checked. `--exclude a/b/` skips another package; use it only for code that
 guards every version-specific reference itself.
 
 ## Install gate
