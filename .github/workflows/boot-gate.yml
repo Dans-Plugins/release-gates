@@ -68,12 +68,14 @@ permissions:
   contents: read
 
 concurrency:
-  group: boot-gate-${{ inputs.repository }}-${{ inputs.sha }}
+  # The Minecraft version is part of the identity: one candidate is booted once per version
+  # its repository supports, and those runs must go in parallel, not queue behind each other.
+  group: boot-gate-${{ inputs.repository }}-${{ inputs.sha }}-${{ inputs.minecraft_version }}
   cancel-in-progress: false
 
 jobs:
   boot:
-    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }} (mc ${{ inputs.minecraft_version }})
     runs-on: ubuntu-latest
     timeout-minutes: 60
 
@@ -196,6 +198,7 @@ jobs:
           REPOSITORY: ${{ inputs.repository }}
           SHA: ${{ inputs.sha }}
           EXPECTED_VERSION: ${{ inputs.expected_version }}
+          MINECRAFT_VERSION: ${{ inputs.minecraft_version }}
           RESULT_PATH: ${{ github.workspace }}/work/result.json
         run: python gates/boot_gate.py
 
@@ -219,7 +222,7 @@ jobs:
               print("## Boot gate — no result written (harness did not run)"); raise SystemExit
           r = json.load(open(p))
           print(f"## Boot gate — {'PASSED' if r['passed'] else 'FAILED'}")
-          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('version')}\n")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('version')} on Minecraft {r.get('minecraftVersion')}\n")
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:
               print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")

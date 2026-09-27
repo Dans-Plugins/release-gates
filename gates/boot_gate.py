@@ -6,6 +6,9 @@ Dan's Plugin Manager's integration test uses) and reads the server's console fro
 `docker logs`. It asserts, in order:
 
   dependencies   every `depend:` in the candidate's plugin.yml is satisfied by a supplied jar
+  minecraft-version  the server runs the Minecraft version asked for (when MINECRAFT_VERSION
+                 is given) — a gate run per supported version proves nothing if the image
+                 quietly built another
   boot-1         the server reaches "Done"; the candidate reports Enabling; no enable failure;
                  no ERROR/SEVERE line or stack frame attributable to the candidate
   version        the version the candidate enables with is the one expected (when given)
@@ -24,6 +27,7 @@ Environment:
   CANDIDATE_JAR        path to the candidate jar (required)
   DEPENDENCY_JARS      newline-separated paths of dependency jars (optional)
   EXPECTED_VERSION     the version string the candidate must enable with (optional)
+  MINECRAFT_VERSION    the Minecraft version the server must report (optional)
   REPOSITORY, SHA      recorded in result.json only
   RESULT_PATH          where to write result.json (default: result.json)
   OMCSI_API_BASE       default http://localhost:8092
@@ -49,6 +53,7 @@ CONTAINER = os.getenv("OMCSI_CONTAINER_NAME", "open-mc-server")
 CANDIDATE_JAR = os.environ["CANDIDATE_JAR"]
 DEPENDENCY_JARS = [p for p in os.getenv("DEPENDENCY_JARS", "").split("\n") if p.strip()]
 EXPECTED_VERSION = os.getenv("EXPECTED_VERSION") or None
+MINECRAFT_VERSION = os.getenv("MINECRAFT_VERSION") or None
 RESULT_PATH = os.getenv("RESULT_PATH", "result.json")
 
 _HEADERS = {"Authorization": f"Bearer {TOKEN}"}
@@ -61,6 +66,7 @@ RESULT = {
     # The release automation publishes the exact bytes that passed: it verifies this digest
     # against the jar it uploads, so a rebuilt `dev` between gate and release cannot slip in.
     "candidateSha256": __import__("hashlib").sha256(open(CANDIDATE_JAR, "rb").read()).hexdigest(),
+    "minecraftVersion": MINECRAFT_VERSION,
     "plugin": None,
     "version": None,
     "passed": False,
@@ -158,6 +164,7 @@ def read_plugin_yml(jar_path):
 
 ERROR_LINE = re.compile(r"/(ERROR|SEVERE)\]")
 DONE_LINE = re.compile(r"Done \([\d.]+s\)!")
+SERVER_VERSION_LINE = re.compile(r"Starting minecraft server version (\S+)")
 # Bukkit's HelpCommand answers `help <topic>` with a "Help: /<topic>" header when the
 # topic exists and "No help for <topic>" when it does not.
 HELP_MISSING = re.compile(r"No help for \S+|Unknown command")
@@ -283,6 +290,11 @@ def main():
         record("baseline", False, "server never started (BuildTools / image problem, not the candidate)")
     if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "baseline Done", poll=10):
         record("baseline", False, "baseline boot never reached Done")
+    if MINECRAFT_VERSION:
+        started = SERVER_VERSION_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc)))
+        running = started.group(1) if started else None
+        record("minecraft-version", running == MINECRAFT_VERSION,
+               f"expected {MINECRAFT_VERSION}, server reports {running or 'no version line'}")
 
     print("\n[deploy] dependencies then candidate...")
     for dep in DEPENDENCY_JARS:
