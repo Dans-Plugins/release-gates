@@ -29,11 +29,12 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `jar_url` | yes | where to download the candidate |
 | `dependencies` | no | comma-separated `owner/repo` list; each one's `/releases/latest` jar is installed beside the candidate, exactly what an operator would get |
 | `expected_version` | no | the version the candidate must report when enabling |
-| `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+| `minecraft_version` | no | Spigot version to boot (default `26.2`). 1.17 and later can be built: OMCSI runs BuildTools on the JDK each version requires |
 
 Assertions, in order — the run stops at the first failure:
 
 1. **dependencies** — every `depend:` in the candidate's `plugin.yml` is satisfied by a supplied jar.
+   **minecraft-version** — after the server's first start, before the candidate is deployed: the server reports `Starting minecraft server version <minecraft_version>`, so a run cannot pass on a version other than the one asked for.
 2. **boot-1** — the server reaches `Done`; the candidate logs `Enabling <name> v<version>`; no `Error occurred while enabling <name>`, `Could not load 'plugins/<jar>'`, `UnknownDependencyException` or `Disabling <name>` line; no `ERROR`/`SEVERE` line naming the plugin and no stack frame inside its package.
 3. **version** — the enabled version equals `expected_version` (when given).
 4. **plugins-1** — `plugins` lists the candidate.
@@ -44,6 +45,15 @@ Assertions, in order — the run stops at the first failure:
 Between **dependencies** and **boot-1** the jars are deployed onto the server's own first
 start; a server that never starts, never reaches `Done` or does not stop before the candidate
 boots fails as **baseline** — an image or runner problem, not the candidate's.
+
+### Several Minecraft versions
+
+A plugin that supports more than one Minecraft version is booted once per version: one
+dispatch per `minecraft_version`. The version is part of the job name
+(`<repository> @ <sha> (mc <version>)`) and of the concurrency group, so the runs for one
+candidate go in parallel and each can be told apart; `result.json` records it as
+`minecraftVersion`. Each version keeps its own OMCSI image cache, so the first run on a new
+version pays the 10–15 minute Spigot build once.
 
 Dispatch by hand:
 
