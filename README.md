@@ -16,6 +16,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 | [`boot-gate.yml`](.github/workflows/boot-gate.yml) | The candidate enables on a fresh server with its dependencies' current stable releases, answers `help` for every command it declares, stops cleanly, and enables again over the data folder it wrote | available |
 | [`dpm-install.yml`](.github/workflows/dpm-install.yml) | `/dpm get <slug>` on a fresh server installs each plugin's current stable release through [Dan's Plugin Manager](https://github.com/Dans-Plugins/Dans-Plugin-Manager), and the installed plugins enable — the acceptance test for a stable release | available |
 | [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides, console commands and a bot scenario that plays it as players, or a published fixture such as an anonymised real-world database — migrates it, and keeps every file and every `<n> <label> loaded` count across any number of its own restarts; on the embedded H2 store, an external MariaDB or PostgreSQL, or the plugin's JSON store with a migration round trip | available |
+| [`gates/check_api_compat.py`](gates/check_api_compat.py) | Every Bukkit class, field and method the jar uses exists on each Minecraft version in the repository's `minecraft-versions.json` — run in each plugin's own CI on every build, see [API-compatibility check](#api-compatibility-check) | available |
 | [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
 
 ## Boot gate
@@ -76,6 +77,47 @@ jobs:
       sha: ${{ github.sha }}
       jar_url: https://github.com/${{ github.repository }}/releases/download/dev/MyPlugin.jar
 ```
+
+## API-compatibility check
+
+A plugin repository lists the Minecraft versions it supports in `minecraft-versions.json` at its
+root:
+
+```json
+{"supported": ["1.19.4", "1.21.11", "26.2"]}
+```
+
+The release automation boots every stable candidate once per listed version (the boot gate,
+above). This check is the fast half, and runs on every build: for each listed version it
+downloads that version's `spigot-api` jar and checks that every `org/bukkit` class, field and
+method the built jar references resolves there, the way the JVM resolves it — including a
+class that changed between enum and interface. It takes seconds and needs only Python 3.
+
+It exists because of Medieval Factions 6.0.0: built against 1.21.11, it referenced
+`PotionType.LONG_POISON`, which only exists from 1.20.5, and failed to enable on 1.19.4
+(Dans-Plugins/Medieval-Factions#2042). It is strict in both directions: newer servers rewrite
+some renamed constants when they load a plugin (`Material.GRASS` → `SHORT_GRASS`), but a
+plugin that relies on that fails here — look the name up at runtime instead, which works on
+every version. Every class that references Bukkit is checked, bundled and shaded code
+included, except XSeries, a library that references newer API on purpose behind its own
+version checks.
+
+Add it to the plugin's build job, after the jar is built, pinned to a tag:
+
+```yaml
+      # Every Bukkit class, field and method the jar uses must exist on each Minecraft
+      # version in minecraft-versions.json.
+      - name: Check Bukkit API use against every supported Minecraft version
+        run: |
+          curl -fsSL -o /tmp/check_api_compat.py \
+            https://raw.githubusercontent.com/Dans-Plugins/release-gates/v10/gates/check_api_compat.py
+          python3 /tmp/check_api_compat.py --versions minecraft-versions.json target build/libs
+```
+
+`target build/libs` covers Maven and Gradle: directories that do not exist are skipped, and
+exactly one plugin jar (one with a `plugin.yml`, not `original-*`, `-sources`, `-javadoc` or
+`-plain`) must be found. `--exclude a/b/` skips another package; use it only for code that
+guards every version-specific reference itself.
 
 ## Install gate
 
