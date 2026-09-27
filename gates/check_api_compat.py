@@ -40,7 +40,8 @@ Usage:
 A PATH is the plugin jar or a directory holding it (`target`, `build/libs`); directories that
 do not exist are skipped, so one command serves Maven and Gradle builds. Exactly one plugin
 jar must be found: a jar with a plugin.yml, not `original-*`, `*-sources`, `*-javadoc` or
-`*-plain`. Exits 1 and lists every problem, per version, when any reference does not resolve.
+`*-plain`. When Gradle's shadow plugin leaves a thin jar beside a single shaded `*-all` jar,
+the shaded one is checked: it is what ships. Exits 1 and lists every problem, per version, when any reference does not resolve.
 Only the standard library is used.
 """
 
@@ -315,6 +316,12 @@ def find_plugin_jar(paths):
         with zipfile.ZipFile(jar) as z:
             if "plugin.yml" in z.namelist():
                 jars.append(jar)
+    if len(jars) > 1:
+        # Gradle's shadow plugin leaves the thin jar beside the shaded `-all` one, and both
+        # carry plugin.yml; the shaded one is what ships.
+        shaded = [j for j in jars if j.endswith("-all.jar")]
+        if len(shaded) == 1:
+            return shaded[0]
     if len(jars) != 1:
         raise SystemExit(f"expected exactly one plugin jar in {paths}, found {len(jars) or 'none'}: {jars}")
     return jars[0]
