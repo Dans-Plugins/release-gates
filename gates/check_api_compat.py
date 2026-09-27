@@ -17,6 +17,11 @@ For every supported version, this downloads that version's spigot-api jar and ch
   method   the method exists on the class, its superclasses or its superinterfaces
   kind     a method referenced as a class method is on a class, and one referenced as an
            interface method is on an interface
+  java     no class in the jar is compiled for a newer Java than the version can run on: the
+           oldest Java it supports (16 for 1.17, 17 up to 1.20.4, 21 up to 1.21.x, 25 from
+           26.x). A server on that Java cannot load such a class at all (Herald compiled for
+           Java 21 failed to load on 1.19.4). Multi-release entries under META-INF/versions/
+           are skipped: the JVM only loads the ones it can run.
 
 Every class in the jar that references `org/bukkit` is checked — the plugin's own code, code
 it bundles from other plugins, and shaded libraries alike, since all of it runs on the server.
@@ -254,6 +259,46 @@ def check(plugin, api):
     return sorted(problems)
 
 
+def minimum_java(version):
+    """The oldest Java a server of this Minecraft version runs on (the same mapping as
+    OMCSI's java-for-minecraft.sh), or None for a version this check does not know."""
+    parts = version.split(".")
+    if parts[0] == "1" and len(parts) >= 2 and all(p.isdigit() for p in parts[1:]):
+        minor = int(parts[1])
+        patch = int(parts[2]) if len(parts) > 2 else 0
+        if minor < 17:
+            return 8
+        if minor == 17:
+            return 16
+        if minor < 20 or (minor == 20 and patch < 5):
+            return 17
+        return 21
+    if parts[0].isdigit() and int(parts[0]) >= 26:
+        return 25
+    return None
+
+
+def class_file_levels(jar):
+    """{class file major version: count} for every class a JVM would load from `jar`."""
+    levels = {}
+    with zipfile.ZipFile(jar) as z:
+        for entry in z.namelist():
+            if entry.endswith(".class") and not entry.startswith("META-INF/"):
+                major = struct.unpack(">H", z.read(entry)[6:8])[0]
+                levels[major] = levels.get(major, 0) + 1
+    return levels
+
+
+def java_problems(levels, version):
+    java = minimum_java(version)
+    if java is None:
+        return [("(jar)", f"unknown Minecraft version {version}: no Java level to check against")]
+    newest = java + 44  # class file major version = Java version + 44
+    too_new = {m: n for m, n in levels.items() if m > newest}
+    return [("(jar)", f"{n} class(es) compiled for Java {m - 44}; Minecraft {version} runs on Java {java}")
+            for m, n in sorted(too_new.items())]
+
+
 def find_plugin_jar(paths):
     """The one plugin jar among `paths` (jars, or directories holding them)."""
     candidates = []
@@ -315,17 +360,18 @@ def main(argv):
     if not plugin:
         print("no class references Bukkit — nothing was checked")
         return 1
+    levels = class_file_levels(jar)
     failed = False
     for version in versions:
         api = Api(read_classes(api_jar(version), API_PACKAGE))
-        problems = check(plugin, api)
+        problems = java_problems(levels, version) + check(plugin, api)
         if problems:
             failed = True
-            print(f"\n{version}: {len(problems)} reference(s) that do not resolve")
+            print(f"\n{version}: {len(problems)} problem(s)")
             for where, message in problems:
                 print(f"  {where}: {message}")
         else:
-            print(f"{version}: every Bukkit reference resolves")
+            print(f"{version}: every Bukkit reference resolves; bytecode fits Java {minimum_java(version)}")
     return 1 if failed else 0
 
 
