@@ -47,6 +47,8 @@ import zipfile
 import requests
 import yaml
 
+import usage_tags  # CI tags on every usage event the server sends (gates/usage_tags.py)
+
 API_BASE = os.getenv("OMCSI_API_BASE", "http://localhost:8092")
 TOKEN = os.environ["OMCSI_DEPLOY_TOKEN"]
 CONTAINER = os.getenv("OMCSI_CONTAINER_NAME", "open-mc-server")
@@ -187,6 +189,9 @@ def attributable_errors(log, plugin_name, package_prefix):
 
 
 def boot(n, plugin_name, package_prefix, commands):
+    ok, detail = usage_tags.write_ci_trace_config(CONTAINER)
+    if not ok:
+        record(f"boot-{n}", False, detail)
     cursor = now_cursor()
     _api("POST", "/api/server/start")
     if not wait_for(lambda: DONE_LINE.search(logs_since(cursor)) is not None, 300, f"boot {n} Done"):

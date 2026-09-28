@@ -110,6 +110,7 @@ import zipfile
 import requests
 import yaml
 
+import usage_tags  # CI tags on every usage event the server sends (gates/usage_tags.py)
 import scenario_runner  # bot scenario (gates/scenario_runner.py); the only other touch is in main()
 
 API_BASE = os.getenv("OMCSI_API_BASE", "http://localhost:8092")
@@ -357,6 +358,10 @@ def restart_and_enable(name, plugin_name, package_prefix, jar_basename):
     if is_running():
         if not stop_server(f"{name} stop"):
             record(name, False, "server did not stop within 120s")
+    # After any fixture unpack, so a fixture's own plugins/trace/config.yml never survives.
+    ok, detail = usage_tags.write_ci_trace_config(CONTAINER)
+    if not ok:
+        record(name, False, detail)
     cursor = now_cursor()
     _api("POST", "/api/server/start")
     if not wait_for(lambda: DONE_LINE.search(logs_since(cursor)) is not None, 300, f"{name} Done"):
@@ -473,9 +478,14 @@ def listing_of(root):
     for dirpath, _, names in os.walk(root):
         for n in names:
             p = os.path.join(dirpath, n)
+            rel = os.path.relpath(p, root).replace(os.sep, "/")
+            # The gate's own CI usage-tag file (gates/usage_tags.py), rewritten before every
+            # boot: not the plugin's data, so never part of what files-kept compares.
+            if rel == usage_tags.TRACE_CONFIG_PATH:
+                continue
             with open(p, "rb") as f:
                 digest = hashlib.sha256(f.read()).hexdigest()
-            files[os.path.relpath(p, root).replace(os.sep, "/")] = {"size": os.path.getsize(p), "sha256": digest}
+            files[rel] = {"size": os.path.getsize(p), "sha256": digest}
     return files
 
 

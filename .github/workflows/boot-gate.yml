@@ -160,6 +160,11 @@ jobs:
             echo "DISCORD_WEBHOOK_URL="
             echo "ALERT_MANAGER_ENABLED=false"
             echo "AGENT_ENABLED=false"
+            # The wrapper reports a startup event to the trace usage service; mark this
+            # run as CI so it is not counted as a real installation. The plugins on the
+            # server are tagged the same way through plugins/trace/config.yml, written
+            # before every boot by gates/usage_tags.py.
+            echo "USAGE_REPORTING_TAGS=ci=true"
           } > omsci.env.tmp
           mv omsci.env.tmp omcsi/.env
 
@@ -207,6 +212,12 @@ jobs:
         run: |
           mkdir -p work/evidence
           docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+          {
+            echo "wrapper USAGE_REPORTING_TAGS=$(docker exec open-mc-server printenv USAGE_REPORTING_TAGS 2>&1)"
+            echo "--- /mcserver/plugins/trace/config.yml"
+            docker exec open-mc-server cat /mcserver/plugins/trace/config.yml 2>&1
+          } > work/evidence/usage-reporting.txt || true
+          cat work/evidence/usage-reporting.txt || true
           plugin=$(python -c 'import json,sys; print(json.load(open("work/result.json")).get("plugin") or "")' 2>/dev/null || true)
           if [ -n "$plugin" ]; then
             docker cp "open-mc-server:/mcserver/plugins/$plugin" work/evidence/data-folder 2>/dev/null || true
