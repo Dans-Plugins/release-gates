@@ -32,6 +32,9 @@ It asserts, in order:
                      a fresh server; the fixture's contents when one was supplied) — so a
                      script that creates two factions over a fixture holding fourteen expects
                      2, not 16 ("none" when no script)
+  baseline-migration (json backend, a baseline with a JSON store and data) the baseline moves its
+                     data to JSON with the plugin's migration command before `storage.type: json`
+                     is applied, and restarts on JSON with the same counts
   fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
                      logged by the baseline's first boot over the fixture with that count,
                      before any scenario has added to it
@@ -818,6 +821,41 @@ def backend_overrides(plugin_name):
     return [f"{STORAGE_TYPE_KEY}: json", f"{JSON_PATH_KEY}: {DEFAULT_JSON_PATH}"], ""
 
 
+def migrate_baseline_to_json(plugin_name, package_prefix, initial_counts):
+    """`baseline-migration` (json backend, baseline with data): a baseline that has a JSON store
+    is switched to it the way an operator does — `faction migrate toJson` on the store its data
+    is in, then `storage.type: json` (config-overrides, below) — so the data comes along. Without
+    this, the switch left a JSON-capable baseline on an empty store and the supplied fixture was
+    silently dropped before the candidate ran (Medieval Factions 6.1.0's gate against 6.0.0).
+    A baseline without a JSON store (5.x) is not switched at all, so nothing is migrated.
+    The counts after the switch are checked against `initial_counts` after config-overrides."""
+    config = read_config(plugin_name, "baseline-config.yml")
+    if config_get(config, STORAGE_TYPE_KEY) is None:
+        record("baseline-migration", True, f"not applicable: the baseline declares no {STORAGE_TYPE_KEY}, so it stays on its default store")
+        return
+    cursor = now_cursor()
+    send_command(MIGRATE_COMMANDS["json"])
+    ok, detail = wait_for_migration(cursor, plugin_name, package_prefix)
+    if not ok:
+        record("baseline-migration", False, f"the baseline could not migrate its data to JSON: {detail}")
+    BASELINE_MIGRATION["detail"] = detail
+    BASELINE_MIGRATION["expected"] = dict(initial_counts)
+    print(f"  {detail}")
+
+
+def check_baseline_migration(counts):
+    """After the baseline restarts on JSON, its counts must equal what it held on its default store."""
+    if not BASELINE_MIGRATION:
+        return
+    mismatched, cdetail = compare_counts(BASELINE_MIGRATION["expected"], counts)
+    if mismatched:
+        record("baseline-migration", False, f"{BASELINE_MIGRATION['detail']}, but on JSON: {cdetail}")
+    record("baseline-migration", True, f"{BASELINE_MIGRATION['detail']} with `{MIGRATE_COMMANDS['json']}`; restarted on JSON with {cdetail}")
+
+
+BASELINE_MIGRATION = {}
+
+
 def json_store_path(plugin_name):
     """Server-root-relative path of the JSON store, from the config (default when unset)."""
     config = read_config(plugin_name, "current-config.yml")
@@ -968,9 +1006,11 @@ def migration_roundtrip(plugin_name, package_prefix, jar_basename, baseline_coun
     for i, (src, dst) in enumerate(((start, other), (other, start))):
         leg = {"from": src, "to": dst}
         legs.append(leg)
-        if i == 1:
+        if i == 1 or (i == 0 and BASELINE_MIGRATION):
             # The store the run started on still holds the data; the migration refuses a
-            # non-empty target, exactly as it would for an operator.
+            # non-empty target, exactly as it would for an operator. On the first leg that
+            # happens when the baseline itself was migrated to JSON (baseline-migration): its
+            # database still holds the pre-migration copy, which an operator clears the same way.
             problems = stop_problems(name, plugin_name, package_prefix)
             if problems:
                 record(name, False, f"stop on {src} before clearing {dst}: {problems[0]}")
@@ -1075,11 +1115,16 @@ def main():
         print("\n[fixture-expected]")
         check_fixture_expected(initial_counts)
 
+    if BACKEND == "json" and any(initial_counts.values()):
+        print("\n[baseline-migration]")
+        migrate_baseline_to_json(baseline_name, baseline_pkg, initial_counts)
+
     print("\n[config-overrides]")
     applied = apply_config_overrides(baseline_name)
     if applied:
-        restart_and_enable("config-overrides", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
+        log, _ = restart_and_enable("config-overrides", baseline_name, baseline_pkg, os.path.basename(BASELINE_JAR))
         record("config-overrides", True, f"applied {applied}; enabled again")
+        check_baseline_migration(loaded_counts(log))
 
     print("\n[scenario]")
     run_scenario(baseline_name, baseline_pkg)
