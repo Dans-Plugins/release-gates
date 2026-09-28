@@ -474,7 +474,9 @@ gh workflow run dependents.yml --repo Dans-Plugins/release-gates \
 ## Evidence
 
 Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `server.log`
-(the full console). The job summary shows the assertion table.
+(the full console). Each also holds `usage-reporting.txt` — the wrapper's
+`USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
+(see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
 
 - Boot gate: `boot-gate-<run id>` —
   `{gate, repository, sha, candidate, plugin, version, candidateSha256, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
@@ -497,6 +499,28 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
   (plus `baselineCloseFailure` when the control phase left a trace file, and
   `closeFailureWithBrokenDependents` when a close failure was excused by a pre-existing
   dependent) and `trace-files/` (every trace file a stop check blamed).
+
+## Usage reporting
+
+Gate servers stay counted, but as CI: every usage event a gate server sends carries the tag
+`ci=true`, so gate runs are not mistaken for real installations.
+
+- OMCSI's minecraft-wrapper: each workflow writes `USAGE_REPORTING_TAGS=ci=true` into the
+  `omcsi/.env` it generates; `compose.yml` passes it through to the wrapper's startup event.
+- Plugins carrying the vendored trace client: before **every** server start the harness makes (the
+  wrapper's own first start has no plugins on it) — each boot and restart cycle, the control/baseline phases, after a supplied fixture is unpacked, on every
+  Minecraft version — the harness writes `/mcserver/plugins/trace/config.yml`
+  ([`gates/usage_tags.py`](gates/usage_tags.py)):
+
+  ```yaml
+  enabled: true
+  tags:
+    ci: "true"
+  ```
+
+  A fixture's own copy of that file is overwritten before any plugin enables, and the file is
+  left out of the save-compatibility gate's `files-kept` comparison. Reporting stays enabled;
+  a trace client that predates the `tags:` block reads only `enabled:`.
 
 ## Design notes
 
