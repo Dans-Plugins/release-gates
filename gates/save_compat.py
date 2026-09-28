@@ -1006,9 +1006,11 @@ def migration_roundtrip(plugin_name, package_prefix, jar_basename, baseline_coun
     for i, (src, dst) in enumerate(((start, other), (other, start))):
         leg = {"from": src, "to": dst}
         legs.append(leg)
-        if i == 1:
+        if i == 1 or (i == 0 and BASELINE_MIGRATION):
             # The store the run started on still holds the data; the migration refuses a
-            # non-empty target, exactly as it would for an operator.
+            # non-empty target, exactly as it would for an operator. On the first leg that
+            # happens when the baseline itself was migrated to JSON (baseline-migration): its
+            # database still holds the pre-migration copy, which an operator clears the same way.
             problems = stop_problems(name, plugin_name, package_prefix)
             if problems:
                 record(name, False, f"stop on {src} before clearing {dst}: {problems[0]}")
