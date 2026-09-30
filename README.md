@@ -484,7 +484,7 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 - Save-compatibility gate: `save-compat-<run id>` —
-  `{gate, repository, sha, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
+  `{gate, repository, sha, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, initialCounts, referenceCounts, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
   (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran, and
   `baselineCloseFailure` when the baseline left a trace file on its own shutdowns)
   — `initialCounts` is `{label: n}` as the baseline's first boot logged it (the supplied
