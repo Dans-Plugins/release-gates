@@ -6,7 +6,10 @@ Drives an OMCSI `minecraft-wrapper` container through its REST API (the same sur
 Dan's Plugin Manager's integration test uses) and reads the server's console from
 `docker logs`. It asserts, in order:
 
-  dpm            the server reaches "Done" with Dan's Plugin Manager enabled
+  baseline       recorded only on failure (fatal): the server's own first start never
+                 started, never reached "Done" or did not stop before DPM boots — an image
+                 or runner problem, not the plugins'
+  dpm           the server reaches "Done" with Dan's Plugin Manager enabled
   get-<slug>     `dpm get <slug>` reports a download (or "already up to date"), and the jar
                  DPM wrote to the plugins folder carries a readable plugin.yml
   boot           the server reaches "Done" over the plugins DPM installed
