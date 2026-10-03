@@ -528,8 +528,14 @@ Gate servers stay counted, but as CI: every usage event a gate server sends carr
   ```
 
   A fixture's own copy of that file is overwritten before any plugin enables, and the file is
-  left out of the save-compatibility gate's `files-kept` comparison. Reporting stays enabled;
-  a trace client that predates the `tags:` block reads only `enabled:`.
+  left out of the save-compatibility gate's `files-kept` comparison.
+
+  Reporting stays enabled unless a jar in `plugins/` carries a trace client older than 0.3.0
+  (the save-compatibility baseline is often one). Such a client reads `enabled:` but not
+  `tags:`, so its events would arrive untagged and count as installations; for that boot the
+  file is written as `enabled: false` instead, and the run log names the jars. The client's
+  generation is read from its `TraceClient.class` constants. A 0.1.x client reads neither
+  key and is logged as a warning.
 
 ## Design notes
 
