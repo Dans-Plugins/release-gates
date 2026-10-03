@@ -9,7 +9,11 @@ Dan's Plugin Manager's integration test uses) and reads the server's console fro
   minecraft-version  the server runs the Minecraft version asked for (when MINECRAFT_VERSION
                  is given) — a gate run per supported version proves nothing if the image
                  quietly built another
-  boot-1         the server reaches "Done"; the candidate reports Enabling; no enable failure;
+  baseline       recorded only on failure: the server's own first start, onto which the jars
+                 are deployed, never started, never reached "Done" or did not stop before the
+                 candidate boots — an image or runner problem, not the candidate's (the
+                 started/Done checks precede minecraft-version, the stop check follows it)
+  boot-1        the server reaches "Done"; the candidate reports Enabling; no enable failure;
                  no ERROR/SEVERE line or stack frame attributable to the candidate
   version        the version the candidate enables with is the one expected (when given)
   plugins-1      `plugins` lists the candidate
