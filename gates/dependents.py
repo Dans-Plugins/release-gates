@@ -12,7 +12,19 @@ stable jar are deployed together on one server, which is then booted twice. It a
                         `dependencies` jar or another dependent). A dependent with no
                         stable release, or one whose other dependency was not supplied,
                         is reported as skipped and is not deployed
-  boot-1                the server reaches "Done" (fatal)
+  boot-control          only with BASELINE_JAR (the control phase): the current stable and
+                        every installed dependent, booted together first, reach "Done" (fatal)
+  enable-<Name>-baseline
+                        only with BASELINE_JAR: the enable-<Name> check against the current
+                        stable. Informational — a failure is recorded as passed with
+                        "PRE-EXISTING against the current stable" and marks the dependent
+                        pre-existing, so it is reported rather than held against the candidate
+  control               only with BASELINE_JAR: summarises which dependents enable against the
+                        stable; fails (fatal) only when the server will not stop around the
+                        control boot or the stable jar cannot be removed
+  boot-1                the server reaches "Done" (fatal). A server that never starts or never
+                        reaches "Done" on its own first start (before anything is deployed),
+                        or does not stop before the candidate boots, is also a failed boot-1
   candidate-enabled-1   the candidate reports Enabling (with the expected version, when
                         given); no enable failure; no ERROR/SEVERE line or stack frame
                         attributable to it (fatal: without the candidate up, nothing about
@@ -38,8 +50,11 @@ Environment:
                        the dependent's stable jar, or null with `reason` when it has none
                        (required)
   EXPECTED_VERSION     the version string the candidate must enable with (optional)
+  BASELINE_JAR         path to the current stable jar; when set, the control phase runs
+                       first (optional)
   REPOSITORY, SHA      recorded in result.json only
   RESULT_PATH          where to write result.json (default: result.json)
+  WORK_DIR             where the evidence directory is written (default: work)
   OMCSI_API_BASE       default http://localhost:8092
   OMCSI_DEPLOY_TOKEN   bearer token for /api/plugins/deploy (required)
   OMCSI_CONTAINER_NAME default open-mc-server
