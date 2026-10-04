@@ -18,6 +18,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 | [`save-compat.yml`](.github/workflows/save-compat.yml) | The candidate loads the data the current stable release wrote — recorded live by booting that release, optionally with config overrides, console commands and a bot scenario that plays it as players, or a published fixture such as an anonymised real-world database — migrates it, and keeps every file and every `<n> <label> loaded` count across any number of its own restarts; on the embedded H2 store, an external MariaDB or PostgreSQL, or the plugin's JSON store with a migration round trip | available |
 | [`gates/check_api_compat.py`](gates/check_api_compat.py) | Every Bukkit class, field and method the jar uses exists on each Minecraft version in the repository's `minecraft-versions.json`, and its bytecode fits the Java each one runs on — run in each plugin's own CI on every build, see [API-compatibility check](#api-compatibility-check) | available |
 | [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
+| [`behaviour-gate.yml`](.github/workflows/behaviour-gate.yml) | For every row of a behaviour table (who does what to which target, where, under which config), the candidate's outcome in the world is the same as the current stable release's, played by mineflayer bots on fresh data for each jar; a row that changed is replayed on both before it counts. Stephenson-Software RFC 0017 (T4) | available (advisory) |
 
 ## Boot gate
 
@@ -470,6 +471,31 @@ gh workflow run dependents.yml --repo Dans-Plugins/release-gates \
   -f dependents=Dans-Plugins/Currencies,Dans-Plugins/Fiefs,Dans-Plugins/Democracy,Dans-Plugins/Bluemap_MedievalFactions \
   -f dependencies=BlueMap-Minecraft/BlueMap#spigot
 ```
+
+## Behaviour gate
+
+`behaviour-gate.yml` runs `gates/behaviour_gate.py`: the T4 tier of Stephenson-Software RFC 0017. The
+table, its setup module and the driver live in
+[Dans-Plugins/plugin-fixtures `scenarios/`](https://github.com/Dans-Plugins/plugin-fixtures/tree/main/scenarios)
+(see "Behaviour tables" there).
+
+For the baseline (the current stable jar) and then the candidate, and for every config group in the
+table: the server stops, the table's `dataPaths` are deleted, the jar and its dependencies are
+deployed, the server boots (and boots again after the group's config overrides), and the driver
+plays the group's rows. Each row's outcome is read from the world and paired with a control row;
+rows a bot could not decide are `not-checked` and never compared.
+
+| Assertion | Passes when |
+|---|---|
+| `behaviour-table` | the table is for the candidate's plugin |
+| `baseline-boot`, `candidate-boot` | each jar enables without attributable errors for every group |
+| `behaviour-harness` | both passes ran and fewer than 10 % of either pass's rows are not checked; otherwise there is no verdict |
+| `behaviour-diff` | no row changed. A row that changed is replayed once on both jars and counts only if it changes again (reported as `flaky` otherwise); a difference only in the refusal message's lang key is `message-changed` and never fails |
+
+The candidate's `lang_en_US.properties` maps refusal messages to lang keys for both passes, so a
+reworded message is not a behaviour change. Bots join only Minecraft versions the pinned mineflayer
+knows, hence `minecraft_version` defaults to `26.1`. A failure here is a behaviour change to explain,
+not necessarily a bug: RFC 0017 keeps T4 advisory until the owner makes it required per plugin.
 
 ## Evidence
 
