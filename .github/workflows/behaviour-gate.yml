@@ -1,0 +1,282 @@
+name: Behaviour gate
+
+# T4 (Stephenson-Software RFC 0017): plays a behaviour table from Dans-Plugins/plugin-fixtures with
+# mineflayer bots on the current stable release and on the candidate, each on fresh plugin data and
+# once per config group, and fails when a row's outcome changed (after a replay on both jars).
+# See gates/behaviour_gate.py and the "Behaviour gate" section of the README.
+
+on:
+  workflow_dispatch:
+    inputs:
+      repository:
+        description: "Plugin repository (owner/repo) — recorded in the result"
+        required: true
+        type: string
+      sha:
+        description: "Commit the candidate was built from — recorded in the result"
+        required: true
+        type: string
+      jar_url:
+        description: "URL of the candidate jar"
+        required: true
+        type: string
+      baseline_jar_url:
+        description: "URL of the current stable jar the candidate is compared with"
+        required: true
+        type: string
+      dependencies:
+        description: "Comma-separated owner/repo list whose /releases/latest jar is installed beside both"
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        description: "Spigot version to boot (bots join only versions the pinned mineflayer knows)"
+        required: false
+        type: string
+        default: "26.1"
+      rows_url:
+        description: "Raw URL of the behaviour table (plugin-fixtures scenarios/<plugin>-behaviour.json)"
+        required: true
+        type: string
+      setup_url:
+        description: "Raw URL of the table's setup module (plugin-fixtures scenarios/<plugin>-behaviour-setup.js)"
+        required: true
+        type: string
+      driver_url:
+        description: "Raw URL of the behaviour driver"
+        required: false
+        type: string
+        default: "https://raw.githubusercontent.com/Dans-Plugins/plugin-fixtures/main/scenarios/behaviour-driver.js"
+  workflow_call:
+    inputs:
+      repository:
+        required: true
+        type: string
+      sha:
+        required: true
+        type: string
+      jar_url:
+        required: true
+        type: string
+      baseline_jar_url:
+        required: true
+        type: string
+      dependencies:
+        required: false
+        type: string
+        default: ""
+      minecraft_version:
+        required: false
+        type: string
+        default: "26.1"
+      rows_url:
+        required: true
+        type: string
+      setup_url:
+        required: true
+        type: string
+      driver_url:
+        required: false
+        type: string
+        default: "https://raw.githubusercontent.com/Dans-Plugins/plugin-fixtures/main/scenarios/behaviour-driver.js"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: behaviour-${{ inputs.repository }}-${{ inputs.sha }}
+  cancel-in-progress: false
+
+jobs:
+  behaviour:
+    name: ${{ inputs.repository }} @ ${{ inputs.sha }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
+
+      - name: Checkout OMCSI
+        uses: actions/checkout@v4
+        with:
+          repository: dmccoystephenson/open-mc-server-infrastructure
+          path: omcsi
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Download candidate and baseline
+        run: |
+          set -euo pipefail
+          for kind in candidate baseline; do
+            if [ "$kind" = candidate ]; then url="${{ inputs.jar_url }}"; else url="${{ inputs.baseline_jar_url }}"; fi
+            mkdir -p "work/$kind"
+            name=$(basename "$url")
+            curl -fsSL -o "work/$kind/$name" "$url"
+            unzip -l "work/$kind/$name" plugin.yml >/dev/null
+            upper=$(echo "$kind" | tr a-z A-Z)
+            echo "${upper}_JAR=$PWD/work/$kind/$name" >> "$GITHUB_ENV"
+          done
+
+      - name: Resolve dependencies to stable releases
+        if: inputs.dependencies != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/deps
+          IFS=',' read -ra repos <<< "${{ inputs.dependencies }}"
+          paths=""
+          for repo in "${repos[@]}"; do
+            repo=$(echo "$repo" | xargs)
+            [ -z "$repo" ] && continue
+            url=$(gh api "repos/$repo/releases/latest" \
+              -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "::error::$repo has no stable release with a jar asset" >&2
+              exit 1
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/deps/$name" "$url"
+            echo "$repo -> $name"
+            paths="${paths}${PWD}/work/deps/${name}"$'\n'
+          done
+          {
+            echo "DEPENDENCY_JARS<<EOF"
+            printf '%s' "$paths"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure OMCSI environment
+        run: |
+          {
+            echo "MINECRAFT_VERSION=${{ inputs.minecraft_version }}"
+            echo "OPERATOR_UUID=00000000-0000-0000-0000-000000000001"
+            echo "OPERATOR_NAME=CIRunner"
+            echo "OPERATOR_LEVEL=4"
+            echo "ONLINE_MODE=false"
+            echo "OVERWRITE_EXISTING_SERVER=true"
+            echo "SERVER_MOTD=Behaviour gate"
+            echo "MAX_PLAYERS=10"
+            echo "DIFFICULTY=peaceful"
+            echo "GAMEMODE=survival"
+            echo "PVP_ENABLED=false"
+            echo "JAVA_OPTS=-Xmx2G -Xms1G"
+            echo "MINECRAFT_AUTO_RESTART=false"
+            echo "DEPLOY_AUTH_TOKEN=behaviour-$GITHUB_RUN_ID"
+            echo "RCON_PASSWORD=behaviour-$GITHUB_RUN_ID"
+            echo "DISCORD_ENABLED=false"
+            echo "DISCORD_WEBHOOK_URL="
+            echo "ALERT_MANAGER_ENABLED=false"
+            echo "AGENT_ENABLED=false"
+            echo "USAGE_REPORTING_TAGS=ci=true"
+          } > omsci.env.tmp
+          mv omsci.env.tmp omcsi/.env
+
+      - name: Cache OMCSI Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/omcsi-images.tar
+          key: omcsi-docker-${{ inputs.minecraft_version }}-${{ hashFiles('omcsi/**/Dockerfile', 'omcsi/compose.yml') }}
+          restore-keys: omcsi-docker-${{ inputs.minecraft_version }}-
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/omcsi-images.tar
+
+      - name: Build OMCSI services
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        working-directory: omcsi
+        env:
+          DOCKER_BUILDKIT: '1'
+          BUILDKIT_PROGRESS: plain
+        run: docker compose build minecraft-wrapper alert-manager
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save open-mc-server open-mc-server-alert-manager > /tmp/omcsi-images.tar
+
+      - name: Start minecraft-wrapper
+        working-directory: omcsi
+        run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
+
+      # The same pinned client as the save-compatibility gate's bot scenario.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install mineflayer
+        run: |
+          set -euo pipefail
+          mkdir -p work/scenario-node
+          cd work/scenario-node
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --loglevel=error mineflayer@4.39.0 minecraft-data@3.116.0
+          node -e "const md=require('minecraft-data'); console.log('mineflayer', require('mineflayer/package.json').version, '- newest pc version known:', md.supportedVersions.pc.slice(-1)[0])"
+
+      - name: Run the behaviour gate
+        env:
+          OMCSI_API_BASE: http://localhost:8092
+          OMCSI_DEPLOY_TOKEN: behaviour-${{ github.run_id }}
+          REPOSITORY: ${{ inputs.repository }}
+          SHA: ${{ inputs.sha }}
+          ROWS_URL: ${{ inputs.rows_url }}
+          SETUP_URL: ${{ inputs.setup_url }}
+          DRIVER_URL: ${{ inputs.driver_url }}
+          SCENARIO_NODE_DIR: ${{ github.workspace }}/work/scenario-node
+          RCON_PASSWORD: behaviour-${{ github.run_id }}
+          WORK_DIR: ${{ github.workspace }}/work
+          RESULT_PATH: ${{ github.workspace }}/work/result.json
+        run: python gates/behaviour_gate.py
+
+      - name: Collect server log
+        if: always()
+        run: |
+          mkdir -p work/evidence
+          docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+
+      - name: Summarize
+        if: always()
+        run: |
+          python - <<'EOF' >> "$GITHUB_STEP_SUMMARY"
+          import json, os
+          p = "work/result.json"
+          if not os.path.exists(p):
+              print("## Behaviour gate — no result written (harness did not run)"); raise SystemExit
+          r = json.load(open(p))
+          print(f"## Behaviour gate — {'PASSED' if r['passed'] else 'FAILED'}")
+          print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('baselineVersion')} → v{r.get('version')}\n")
+          interesting = [x for x in r.get("rows", []) if x["result"] != "same"]
+          if interesting:
+              print("| group | row | result | stable | candidate |\n|---|---|---|---|---|")
+              for x in interesting:
+                  print(f"| {x['group']} | {x['id']} | {x['result']} | `{json.dumps(x['stable'])}` | `{json.dumps(x['candidate'])}` |")
+              print()
+          print(f"{sum(1 for x in r.get('rows', []) if x['result'] == 'same')} row(s) unchanged.\n")
+          print("| assertion | result | detail |\n|---|---|---|")
+          for a in r["assertions"]:
+              print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")
+          EOF
+
+      - name: Upload evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behaviour-${{ github.run_id }}
+          path: |
+            work/result.json
+            work/evidence/
+          if-no-files-found: warn
+
+      - name: Tear down OMCSI stack
+        if: always()
+        working-directory: omcsi
+        run: docker compose down -v || true
