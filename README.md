@@ -479,8 +479,17 @@ table, its setup module and the driver live in
 [Dans-Plugins/plugin-fixtures `scenarios/`](https://github.com/Dans-Plugins/plugin-fixtures/tree/main/scenarios)
 (see "Behaviour tables" there).
 
-For the baseline (the current stable jar) and then the candidate, and for every config group in the
-table: the server stops, the table's `dataPaths` are deleted, the jar and its dependencies are
+Since v17 the work is **sharded**: a `plan` job (named `<repository> @ <sha>`, which is how
+quartermaster finds the run) cuts the table into shards of up to `shard_size` rows (default 15) per
+config group; one `pass` job per shard and jar plays it on its own server, all in parallel
+(Medieval Factions' 76 rows: 20 pass jobs, about 10 minutes instead of about 40); `compare` merges
+them, requires one result per planned shard and jar (otherwise no verdict), replays changed rows
+on both jars and judges. `candidate_artifact` (workflow_call) takes the candidate from an artifact of
+the calling run, so a plugin's pull-request workflow can gate its own build. Every run also writes
+`behaviour.md`, a "who can do what" table of the candidate's observed outcomes
+(`gates/behaviour_page.py`).
+
+Within each pass, for the jar and the shard's config group: the server stops, the table's `dataPaths` are deleted, the jar and its dependencies are
 deployed, the server boots (and boots again after the group's config overrides), and the driver
 plays the group's rows. Each row's outcome is read from the world and paired with a control row;
 rows a bot could not decide are `not-checked` and never compared.
