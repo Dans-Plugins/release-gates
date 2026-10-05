@@ -74,7 +74,7 @@ def render(table, docs, version, roles_order=None):
             observed[r["id"]] = r
     lines = [f"# Who can do what — {table.get('plugin')} {version}", "",
              "Observed by bots on a real server (the behaviour gate, Stephenson-Software RFC 0017), not written by "
-             "hand. ✅ took effect · ❌ refused · ✅⚠ took effect but the player was told it was refused · · not observed.", ""]
+             "hand. ✅ took effect · ❌ refused · ✅⚠ took effect but the player was told it was refused · · not observed (the bot could not decide it) · blank: no row for that role and action (not tested).", ""]
     for group, overrides in table["configGroups"].items():
         rows = [r for r in table["rows"] if r["group"] == group]
         if not rows:
