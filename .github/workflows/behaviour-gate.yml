@@ -25,7 +25,7 @@ on:
         required: true
         type: string
       dependencies:
-        description: "Comma-separated owner/repo list whose /releases/latest jar is installed beside both"
+        description: "Comma-separated owner/repo[#asset-substring] list whose /releases/latest jar is installed beside both"
         required: false
         type: string
         default: ""
@@ -124,6 +124,8 @@ jobs:
             echo "${upper}_JAR=$PWD/work/$kind/$name" >> "$GITHUB_ENV"
           done
 
+      # Each dependency is its current stable release; `owner/repo#substring` narrows a release
+      # that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`), as in dependents.yml.
       - name: Resolve dependencies to stable releases
         if: inputs.dependencies != ''
         env:
@@ -131,20 +133,23 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p work/deps
-          IFS=',' read -ra repos <<< "${{ inputs.dependencies }}"
+          IFS=',' read -ra entries <<< "${{ inputs.dependencies }}"
           paths=""
-          for repo in "${repos[@]}"; do
-            repo=$(echo "$repo" | xargs)
-            [ -z "$repo" ] && continue
-            url=$(gh api "repos/$repo/releases/latest" \
-              -q '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not)][0].browser_download_url')
+          for entry in "${entries[@]}"; do
+            entry=$(echo "$entry" | xargs)
+            [ -z "$entry" ] && continue
+            repo=${entry%%#*}
+            sub=""
+            [ "$entry" != "$repo" ] && sub=${entry#*#}
+            url=$(gh api "repos/$repo/releases/latest" | jq -r --arg sub "$sub" \
+              '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not) | select(.name | contains($sub))][0].browser_download_url')
             if [ -z "$url" ] || [ "$url" = "null" ]; then
-              echo "::error::$repo has no stable release with a jar asset" >&2
+              echo "::error::$repo has no stable release with a jar asset${sub:+ containing '$sub'}" >&2
               exit 1
             fi
             name=$(basename "$url")
             curl -fsSL -o "work/deps/$name" "$url"
-            echo "$repo -> $name"
+            echo "$entry -> $name"
             paths="${paths}${PWD}/work/deps/${name}"$'\n'
           done
           {

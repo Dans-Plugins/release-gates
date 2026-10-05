@@ -29,7 +29,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `repository` | yes | `owner/repo` of the plugin — recorded in the result |
 | `sha` | yes | commit the candidate was built from — recorded in the result |
 | `jar_url` | yes | where to download the candidate |
-| `dependencies` | no | comma-separated `owner/repo` list; each one's `/releases/latest` jar is installed beside the candidate, exactly what an operator would get |
+| `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list; each one's `/releases/latest` jar is installed beside the candidate, exactly what an operator would get. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`); without it the first non-`original-` jar is taken |
 | `expected_version` | no | the version the candidate must report when enabling |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`). 1.17 and later can be built: OMCSI runs BuildTools on the JDK each version requires |
 
@@ -183,7 +183,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `sha` | yes | commit the candidate was built from — recorded in the result |
 | `jar_url` | yes | where to download the candidate |
 | `baseline_jar_url` | yes | where to download the current stable jar whose data the candidate must load |
-| `dependencies` | no | comma-separated `owner/repo` list; each one's `/releases/latest` jar is installed beside both jars, exactly as in the boot gate |
+| `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list; each one's `/releases/latest` jar is installed beside both jars, exactly as in the boot gate |
 | `expected_version` | no | the version the candidate must report when enabling |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`) |
 | `config_overrides` | no | newline-separated `dotted.key: value` lines applied to `plugins/<Name>/config.yml` after the baseline's first boot (the file is re-serialised, so comments are lost); `<Name>` is the plugin.yml `name:` |
