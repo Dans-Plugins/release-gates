@@ -501,6 +501,16 @@ rows a bot could not decide are `not-checked` and never compared.
 | `behaviour-harness` | both passes ran and fewer than 10 % of either pass's rows are not checked; otherwise there is no verdict |
 | `behaviour-diff` | no row changed. A row that changed is replayed once on both jars and counts only if it changes again (reported as `flaky` otherwise); a difference only in the refusal message's lang key is `message-changed` and never fails |
 
+**Spec mode** (Stephenson-Software RFC 0019, v22): a row may carry `expect: {effect, refusal?,
+source, reviewed, note?}`, where `source` is `<owner>/<repo>/<path>@<sha>#L<a>[-L<b>]`, the doc line
+that promises the behaviour, pinned to a commit. Every reviewed expectation is checked on both jars
+(`gates/behaviour_spec.py`): `ok`; `mismatch` (the candidate contradicts the docs and the stable did
+not; replayed once on the candidate, then fails `behaviour-spec`); `pre-existing` (both jars
+contradict the docs; reported, never fails); `fixed`; `source-missing` (the cited file or lines do
+not exist; not enforced); `unchecked`. Rows without a reviewed expectation get a proposal in
+`evidence/expectations-proposed.json`. The page marks a contradicted cell `≠`, and `result.json`
+carries the page (`page`) and the per-row spec results (`spec`).
+
 The candidate's `lang_en_US.properties` maps refusal messages to lang keys for both passes, so a
 reworded message is not a behaviour change. Bots join only Minecraft versions the pinned mineflayer
 knows, hence `minecraft_version` defaults to `26.1`. A failure here is a behaviour change to explain,

@@ -64,7 +64,7 @@ def cell(observed, row, informational=()):
     return "❌"
 
 
-def render(table, docs, version, roles_order=None):
+def render(table, docs, version, roles_order=None, spec=None):
     """`docs` maps config group → the driver's outcome document for that group (rows with id,
     role, arena, status, outcome). Returns Markdown."""
     by_id = {r["id"]: r for r in table["rows"]}
@@ -74,7 +74,7 @@ def render(table, docs, version, roles_order=None):
             observed[r["id"]] = r
     lines = [f"# Who can do what — {table.get('plugin')} {version}", "",
              "Observed by bots on a real server (the behaviour gate, Stephenson-Software RFC 0017), not written by "
-             "hand. ✅ took effect · ❌ refused · ✅⚠ took effect but the player was told it was refused · · not observed (the bot could not decide it) · blank: no row for that role and action (not tested).", ""]
+             "hand. ✅ took effect · ❌ refused · ✅⚠ took effect but the player was told it was refused · · not observed (the bot could not decide it) · blank: no row for that role and action (not tested) · ≠ contradicts the documentation the row cites.", ""]
     for group, overrides in table["configGroups"].items():
         rows = [r for r in table["rows"] if r["group"] == group]
         if not rows:
@@ -94,8 +94,11 @@ def render(table, docs, version, roles_order=None):
                 cells = []
                 for role in roles:
                     match = next((r for r in arena_rows if r["role"] == role and action_label(r) == a), None)
-                    cells.append(cell(observed.get(match["id"]), match, table.get("informationalMessageKeys") or ())
-                                 if match else "")
+                    text = cell(observed.get(match["id"]), match, table.get("informationalMessageKeys") or ()) if match else ""
+                    # RFC 0019: ≠ marks a cell that contradicts the documentation it cites.
+                    if match and (spec or {}).get(match["id"]) in ("mismatch", "pre-existing"):
+                        text += " ≠"
+                    cells.append(text)
                 lines.append(f"| {a} | " + " | ".join(cells) + " |")
             lines.append("")
     return "\n".join(lines)
