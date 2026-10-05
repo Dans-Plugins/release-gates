@@ -17,9 +17,10 @@ on:
         required: true
         type: string
       jar_url:
-        description: "URL of the candidate jar"
-        required: true
+        description: "URL of the candidate jar (or give candidate_artifact)"
+        required: false
         type: string
+        default: ""
       baseline_jar_url:
         description: "URL of the current stable jar the candidate is compared with"
         required: true
@@ -47,6 +48,11 @@ on:
         required: false
         type: string
         default: "https://raw.githubusercontent.com/Dans-Plugins/plugin-fixtures/main/scenarios/behaviour-driver.js"
+      shard_size:
+        description: "Rows per pass job; each shard runs on its own server, both jars in parallel"
+        required: false
+        type: string
+        default: "15"
   workflow_call:
     inputs:
       repository:
@@ -56,8 +62,18 @@ on:
         required: true
         type: string
       jar_url:
-        required: true
+        required: false
         type: string
+        default: ""
+      candidate_artifact:
+        description: "Name of an artifact in the calling run that holds the candidate jar (a PR build); used instead of jar_url"
+        required: false
+        type: string
+        default: ""
+      shard_size:
+        required: false
+        type: string
+        default: "15"
       baseline_jar_url:
         required: true
         type: string
@@ -88,11 +104,48 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  behaviour:
+  # The planner carries the `<repository> @ <sha>` name quartermaster finds the run by
+  # (gates.dispatch), and cuts the table into shards. Every shard is then played on both jars by
+  # its own pass job, each on a fresh server, in parallel; compare judges and replays.
+  plan:
     name: ${{ inputs.repository }} @ ${{ inputs.sha }}
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      matrix: ${{ steps.plan.outputs.matrix }}
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Plan the shards
+        id: plan
+        env:
+          MODE: plan
+          ROWS_URL: ${{ inputs.rows_url }}
+          SHARD_SIZE: ${{ inputs.shard_size || '15' }}
+          WORK_DIR: ${{ github.workspace }}/work
+        run: |
+          set -euo pipefail
+          matrix=$(python gates/behaviour_gate.py)
+          echo "$matrix" | python -c 'import json,sys; m=json.load(sys.stdin)["include"]; print(len(m), "pass job(s)")'
+          echo "matrix=$matrix" >> "$GITHUB_OUTPUT"
+
+  pass:
+    name: pass ${{ matrix.side }} ${{ matrix.key }}
+    needs: plan
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
       - name: Checkout gates
         uses: actions/checkout@v4
@@ -111,21 +164,37 @@ jobs:
       - name: Install harness dependencies
         run: pip install requests pyyaml
 
+      - name: Fetch the candidate artifact
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_artifact }}
+          path: work/candidate-artifact
+
       - name: Download candidate and baseline
+        env:
+          JAR_URL: ${{ inputs.jar_url }}
+          BASELINE_URL: ${{ inputs.baseline_jar_url }}
+          CANDIDATE_ARTIFACT: ${{ inputs.candidate_artifact }}
         run: |
           set -euo pipefail
+          mkdir -p work/candidate work/baseline
+          if [ -n "$CANDIDATE_ARTIFACT" ]; then
+            jar=$(find work/candidate-artifact -name '*.jar' ! -name 'original-*' | head -n1)
+            [ -n "$jar" ] || { echo "::error::artifact $CANDIDATE_ARTIFACT holds no jar" >&2; exit 1; }
+            cp "$jar" work/candidate/
+          else
+            [ -n "$JAR_URL" ] || { echo "::error::give jar_url or candidate_artifact" >&2; exit 1; }
+            curl -fsSL -o "work/candidate/$(basename "$JAR_URL")" "$JAR_URL"
+          fi
+          curl -fsSL -o "work/baseline/$(basename "$BASELINE_URL")" "$BASELINE_URL"
           for kind in candidate baseline; do
-            if [ "$kind" = candidate ]; then url="${{ inputs.jar_url }}"; else url="${{ inputs.baseline_jar_url }}"; fi
-            mkdir -p "work/$kind"
-            name=$(basename "$url")
-            curl -fsSL -o "work/$kind/$name" "$url"
-            unzip -l "work/$kind/$name" plugin.yml >/dev/null
+            jar=$(ls work/$kind/*.jar | head -n1)
+            unzip -l "$jar" plugin.yml >/dev/null
             upper=$(echo "$kind" | tr a-z A-Z)
-            echo "${upper}_JAR=$PWD/work/$kind/$name" >> "$GITHUB_ENV"
+            echo "${upper}_JAR=$PWD/$jar" >> "$GITHUB_ENV"
           done
 
-      # Each dependency is its current stable release; `owner/repo#substring` narrows a release
-      # that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`), as in dependents.yml.
       - name: Resolve dependencies to stable releases
         if: inputs.dependencies != ''
         env:
@@ -227,8 +296,11 @@ jobs:
           npm install --no-audit --no-fund --loglevel=error mineflayer@4.39.0 minecraft-data@3.116.0
           node -e "const md=require('minecraft-data'); console.log('mineflayer', require('mineflayer/package.json').version, '- newest pc version known:', md.supportedVersions.pc.slice(-1)[0])"
 
-      - name: Run the behaviour gate
+      - name: Play the shard
         env:
+          MODE: pass
+          SIDE: ${{ matrix.side }}
+          SHARD: ${{ matrix.key }}
           OMCSI_API_BASE: http://localhost:8092
           OMCSI_DEPLOY_TOKEN: behaviour-${{ github.run_id }}
           REPOSITORY: ${{ inputs.repository }}
@@ -236,6 +308,208 @@ jobs:
           ROWS_URL: ${{ inputs.rows_url }}
           SETUP_URL: ${{ inputs.setup_url }}
           DRIVER_URL: ${{ inputs.driver_url }}
+          SHARD_SIZE: ${{ inputs.shard_size || '15' }}
+          SCENARIO_NODE_DIR: ${{ github.workspace }}/work/scenario-node
+          RCON_PASSWORD: behaviour-${{ github.run_id }}
+          WORK_DIR: ${{ github.workspace }}/work
+          RESULT_PATH: ${{ github.workspace }}/work/pass.json
+        run: python gates/behaviour_gate.py || true
+
+      - name: Collect server log
+        if: always()
+        run: |
+          mkdir -p work/evidence
+          docker logs open-mc-server > work/evidence/server-${{ matrix.side }}-${{ matrix.key }}.log 2>&1 || true
+
+      - name: Upload the pass
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: behaviour-pass-${{ matrix.side }}-${{ matrix.key }}
+          path: |
+            work/pass.json
+            work/evidence/
+          if-no-files-found: warn
+
+      - name: Tear down OMCSI stack
+        if: always()
+        working-directory: omcsi
+        run: docker compose down -v || true
+
+  compare:
+    name: compare
+    needs: [plan, pass]
+    if: always() && needs.plan.result == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout gates
+        uses: actions/checkout@v4
+
+      - name: Checkout OMCSI
+        uses: actions/checkout@v4
+        with:
+          repository: dmccoystephenson/open-mc-server-infrastructure
+          path: omcsi
+
+      - name: Fetch every pass
+        uses: actions/download-artifact@v4
+        with:
+          pattern: behaviour-pass-*
+          path: work/passes
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install harness dependencies
+        run: pip install requests pyyaml
+
+      - name: Fetch the candidate artifact
+        if: inputs.candidate_artifact != ''
+        uses: actions/download-artifact@v4
+        with:
+          name: ${{ inputs.candidate_artifact }}
+          path: work/candidate-artifact
+
+      - name: Download candidate and baseline
+        env:
+          JAR_URL: ${{ inputs.jar_url }}
+          BASELINE_URL: ${{ inputs.baseline_jar_url }}
+          CANDIDATE_ARTIFACT: ${{ inputs.candidate_artifact }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/candidate work/baseline
+          if [ -n "$CANDIDATE_ARTIFACT" ]; then
+            jar=$(find work/candidate-artifact -name '*.jar' ! -name 'original-*' | head -n1)
+            [ -n "$jar" ] || { echo "::error::artifact $CANDIDATE_ARTIFACT holds no jar" >&2; exit 1; }
+            cp "$jar" work/candidate/
+          else
+            [ -n "$JAR_URL" ] || { echo "::error::give jar_url or candidate_artifact" >&2; exit 1; }
+            curl -fsSL -o "work/candidate/$(basename "$JAR_URL")" "$JAR_URL"
+          fi
+          curl -fsSL -o "work/baseline/$(basename "$BASELINE_URL")" "$BASELINE_URL"
+          for kind in candidate baseline; do
+            jar=$(ls work/$kind/*.jar | head -n1)
+            unzip -l "$jar" plugin.yml >/dev/null
+            upper=$(echo "$kind" | tr a-z A-Z)
+            echo "${upper}_JAR=$PWD/$jar" >> "$GITHUB_ENV"
+          done
+
+      - name: Resolve dependencies to stable releases
+        if: inputs.dependencies != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/deps
+          IFS=',' read -ra entries <<< "${{ inputs.dependencies }}"
+          paths=""
+          for entry in "${entries[@]}"; do
+            entry=$(echo "$entry" | xargs)
+            [ -z "$entry" ] && continue
+            repo=${entry%%#*}
+            sub=""
+            [ "$entry" != "$repo" ] && sub=${entry#*#}
+            url=$(gh api "repos/$repo/releases/latest" | jq -r --arg sub "$sub" \
+              '[.assets[] | select(.name | endswith(".jar")) | select(.name | startswith("original-") | not) | select(.name | contains($sub))][0].browser_download_url')
+            if [ -z "$url" ] || [ "$url" = "null" ]; then
+              echo "::error::$repo has no stable release with a jar asset${sub:+ containing '$sub'}" >&2
+              exit 1
+            fi
+            name=$(basename "$url")
+            curl -fsSL -o "work/deps/$name" "$url"
+            echo "$entry -> $name"
+            paths="${paths}${PWD}/work/deps/${name}"$'\n'
+          done
+          {
+            echo "DEPENDENCY_JARS<<EOF"
+            printf '%s' "$paths"
+            echo "EOF"
+          } >> "$GITHUB_ENV"
+
+      - name: Configure OMCSI environment
+        run: |
+          {
+            echo "MINECRAFT_VERSION=${{ inputs.minecraft_version }}"
+            echo "OPERATOR_UUID=00000000-0000-0000-0000-000000000001"
+            echo "OPERATOR_NAME=CIRunner"
+            echo "OPERATOR_LEVEL=4"
+            echo "ONLINE_MODE=false"
+            echo "OVERWRITE_EXISTING_SERVER=true"
+            echo "SERVER_MOTD=Behaviour gate"
+            echo "MAX_PLAYERS=10"
+            echo "DIFFICULTY=peaceful"
+            echo "GAMEMODE=survival"
+            echo "PVP_ENABLED=false"
+            echo "JAVA_OPTS=-Xmx2G -Xms1G"
+            echo "MINECRAFT_AUTO_RESTART=false"
+            echo "DEPLOY_AUTH_TOKEN=behaviour-$GITHUB_RUN_ID"
+            echo "RCON_PASSWORD=behaviour-$GITHUB_RUN_ID"
+            echo "DISCORD_ENABLED=false"
+            echo "DISCORD_WEBHOOK_URL="
+            echo "ALERT_MANAGER_ENABLED=false"
+            echo "AGENT_ENABLED=false"
+            echo "USAGE_REPORTING_TAGS=ci=true"
+          } > omsci.env.tmp
+          mv omsci.env.tmp omcsi/.env
+
+      - name: Cache OMCSI Docker images
+        id: docker-cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/omcsi-images.tar
+          key: omcsi-docker-${{ inputs.minecraft_version }}-${{ hashFiles('omcsi/**/Dockerfile', 'omcsi/compose.yml') }}
+          restore-keys: omcsi-docker-${{ inputs.minecraft_version }}-
+
+      - name: Load cached Docker images
+        if: steps.docker-cache.outputs.cache-hit == 'true'
+        run: docker load < /tmp/omcsi-images.tar
+
+      - name: Build OMCSI services
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        working-directory: omcsi
+        env:
+          DOCKER_BUILDKIT: '1'
+          BUILDKIT_PROGRESS: plain
+        run: docker compose build minecraft-wrapper alert-manager
+
+      - name: Save Docker images to cache
+        if: steps.docker-cache.outputs.cache-hit != 'true'
+        run: docker save open-mc-server open-mc-server-alert-manager > /tmp/omcsi-images.tar
+
+      - name: Start minecraft-wrapper
+        working-directory: omcsi
+        run: docker compose up -d ${{ steps.docker-cache.outputs.cache-hit == 'true' && '--no-build' || '' }} minecraft-wrapper
+
+      # The same pinned client as the save-compatibility gate's bot scenario.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+
+      - name: Install mineflayer
+        run: |
+          set -euo pipefail
+          mkdir -p work/scenario-node
+          cd work/scenario-node
+          npm init -y >/dev/null
+          npm install --no-audit --no-fund --loglevel=error mineflayer@4.39.0 minecraft-data@3.116.0
+          node -e "const md=require('minecraft-data'); console.log('mineflayer', require('mineflayer/package.json').version, '- newest pc version known:', md.supportedVersions.pc.slice(-1)[0])"
+
+      - name: Compare, replay changed rows, judge
+        env:
+          MODE: compare
+          PASS_DIR: ${{ github.workspace }}/work/passes
+          OMCSI_API_BASE: http://localhost:8092
+          OMCSI_DEPLOY_TOKEN: behaviour-${{ github.run_id }}
+          REPOSITORY: ${{ inputs.repository }}
+          SHA: ${{ inputs.sha }}
+          ROWS_URL: ${{ inputs.rows_url }}
+          SETUP_URL: ${{ inputs.setup_url }}
+          DRIVER_URL: ${{ inputs.driver_url }}
+          SHARD_SIZE: ${{ inputs.shard_size || '15' }}
           SCENARIO_NODE_DIR: ${{ github.workspace }}/work/scenario-node
           RCON_PASSWORD: behaviour-${{ github.run_id }}
           WORK_DIR: ${{ github.workspace }}/work
@@ -246,7 +520,7 @@ jobs:
         if: always()
         run: |
           mkdir -p work/evidence
-          docker logs open-mc-server > work/evidence/server.log 2>&1 || true
+          docker logs open-mc-server > work/evidence/server-replay.log 2>&1 || true
 
       - name: Summarize
         if: always()
