@@ -485,7 +485,7 @@ config group; one `pass` job per shard and jar plays it on its own server, all i
 (Medieval Factions' 76 rows: 20 pass jobs, about 10 minutes instead of about 40); `compare` merges
 them, requires one result per planned shard and jar (otherwise no verdict), replays changed rows
 on both jars and judges. `candidate_artifact` (workflow_call) takes the candidate from an artifact of
-the calling run, so a plugin's pull-request workflow can gate its own build. Every run also writes
+the calling run, so a plugin's pull-request workflow can gate its own build. A caller passes `gates_ref` with the same tag as its `uses: …@<tag>`, so the gate scripts are checked out from release-gates at that tag (a bare checkout under `workflow_call` would fetch the caller's repository). Every run also writes
 `behaviour.md`, a "who can do what" table of the candidate's observed outcomes
 (`gates/behaviour_page.py`).
 
