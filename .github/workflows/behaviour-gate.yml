@@ -255,7 +255,7 @@ jobs:
             echo "MAX_PLAYERS=10"
             echo "DIFFICULTY=peaceful"
             echo "GAMEMODE=survival"
-            echo "PVP_ENABLED=false"
+            echo "PVP_ENABLED=true"   # PvP rows (attackPlayer) need it; the plugin decides who may hurt whom
             echo "JAVA_OPTS=-Xmx2G -Xms1G"
             echo "MINECRAFT_AUTO_RESTART=false"
             echo "DEPLOY_AUTH_TOKEN=behaviour-$GITHUB_RUN_ID"
@@ -462,7 +462,7 @@ jobs:
             echo "MAX_PLAYERS=10"
             echo "DIFFICULTY=peaceful"
             echo "GAMEMODE=survival"
-            echo "PVP_ENABLED=false"
+            echo "PVP_ENABLED=true"   # PvP rows (attackPlayer) need it; the plugin decides who may hurt whom
             echo "JAVA_OPTS=-Xmx2G -Xms1G"
             echo "MINECRAFT_AUTO_RESTART=false"
             echo "DEPLOY_AUTH_TOKEN=behaviour-$GITHUB_RUN_ID"
