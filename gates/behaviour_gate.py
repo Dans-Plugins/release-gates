@@ -357,14 +357,6 @@ def not_checked_share(results):
 
 def judge(table, files, plugin_name, package_prefix, baseline, candidate, deployed):
     """Harness share, comparison, replay of changed rows on both jars, verdict. Ends the run."""
-    # The candidate's observed behaviour as a "who can do what" page (gates/behaviour_page.py).
-    try:
-        import behaviour_page
-        page = behaviour_page.render(table, candidate, f"v{RESULT.get('version')}")
-        with open(os.path.join(WORK_DIR, "evidence", "behaviour.md"), "w") as f:
-            f.write(page)
-    except Exception as exc:  # evidence only; never masks the verdict
-        print(f"  behaviour page not written: {exc}")
     for label, results in (("stable", baseline), ("candidate", candidate)):
         share, n = not_checked_share(results)
         if share >= MAX_NOT_CHECKED:
@@ -402,8 +394,60 @@ def judge(table, files, plugin_name, package_prefix, baseline, candidate, deploy
         detail += ": " + ", ".join(f"{r['group']}/{r['id']}" for r in real)
     RESULT["assertions"].append({"name": "behaviour-diff", "passed": not real, "detail": detail})
     print(f"  {'PASS' if not real else 'FAIL'}: behaviour-diff — {detail}")
+
+    spec_ok = judge_spec(table, files, plugin_name, package_prefix, baseline, candidate, deployed)
+
+    # The candidate's observed behaviour as a "who can do what" page (gates/behaviour_page.py),
+    # with every cell that contradicts a reviewed expectation marked. Also carried in result.json,
+    # so quartermaster can commit it to the plugin's BEHAVIOUR.md after a release (RFC 0019).
+    try:
+        import behaviour_page
+        marks = {e["id"]: e["status"] for e in RESULT.get("spec", [])}
+        page = behaviour_page.render(table, candidate, f"v{RESULT.get('version')}", spec=marks)
+        with open(os.path.join(WORK_DIR, "evidence", "behaviour.md"), "w") as f:
+            f.write(page)
+        RESULT["page"] = page
+    except Exception as exc:  # evidence only; never masks the verdict
+        print(f"  behaviour page not written: {exc}")
     stop_server("final stop")
-    finish(not real)
+    finish(not real and spec_ok)
+
+
+def judge_spec(table, files, plugin_name, package_prefix, baseline, candidate, deployed):
+    """RFC 0019: check every reviewed expectation on both jars; replay a candidate-only mismatch once
+    on the candidate. Records `behaviour-spec` (fails only on a confirmed candidate-only mismatch; a
+    both-jar mismatch is pre-existing and never blocks) and writes proposals for rows without one."""
+    import behaviour_spec
+    rows = {r["id"]: r for r in table["rows"]}
+    stable_rows = {r["id"]: r for doc in baseline.values() if doc for r in doc["rows"]}
+    cand_rows = {r["id"]: r for doc in candidate.values() if doc for r in doc["rows"]}
+    spec = behaviour_spec.evaluate(table, stable_rows, cand_rows)
+    mism = [e for e in spec if e["status"] == "mismatch"]
+    if mism:
+        by_group = {}
+        for e in mism:
+            by_group.setdefault(e["group"], []).append(e["id"])
+        print(f"\n[replay] {len(mism)} spec mismatch(es) on the candidate")
+        again, _ = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed, by_group)
+        replayed = {r["id"]: r for doc in again.values() if doc for r in doc["rows"]}
+        for e in mism:
+            if behaviour_spec.check(e["expect"], replayed.get(e["id"]), rows[e["id"]], table) != "mismatch":
+                e["status"] = "flaky"
+    RESULT["spec"] = spec
+    proposals = behaviour_spec.propose(table, cand_rows)
+    with open(os.path.join(WORK_DIR, "evidence", "expectations-proposed.json"), "w") as f:
+        json.dump(proposals, f, indent=1)
+    counts = {k: sum(1 for e in spec if e["status"] == k) for k in
+              ("ok", "mismatch", "pre-existing", "fixed", "flaky", "source-missing", "unchecked")}
+    unreviewed = sum(1 for r in table["rows"] if not (r.get("expect") or {}).get("reviewed"))
+    bad = [e for e in spec if e["status"] == "mismatch"]
+    detail = (f"{len(spec)} reviewed: " + ", ".join(f"{v} {k}" for k, v in counts.items() if v)
+              + f"; {unreviewed} row(s) without a reviewed expectation ({len(proposals)} proposed)")
+    if bad:
+        detail += "; candidate contradicts the docs: " + ", ".join(f"{e['group']}/{e['id']}" for e in bad)
+    RESULT["assertions"].append({"name": "behaviour-spec", "passed": not bad, "detail": detail})
+    print(f"  {'PASS' if not bad else 'FAIL'}: behaviour-spec — {detail}")
+    return not bad
 
 
 def shards(table, size=None):
