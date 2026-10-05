@@ -51,24 +51,30 @@ import yaml
 
 import usage_tags  # CI tags on every usage event the server sends (gates/usage_tags.py)
 
-API_BASE = os.environ["OMCSI_API_BASE"].rstrip("/")
-TOKEN = os.environ["OMCSI_DEPLOY_TOKEN"]
+MODE = os.getenv("MODE", "single")  # single | plan | pass | compare (see main)
+API_BASE = os.getenv("OMCSI_API_BASE", "").rstrip("/")
+TOKEN = os.getenv("OMCSI_DEPLOY_TOKEN", "")
 CONTAINER = os.getenv("OMCSI_CONTAINER_NAME", "open-mc-server")
 SERVER_ROOT = "/mcserver"
-BASELINE_JAR = os.environ["BASELINE_JAR"]
-CANDIDATE_JAR = os.environ["CANDIDATE_JAR"]
+BASELINE_JAR = os.getenv("BASELINE_JAR", "")
+CANDIDATE_JAR = os.getenv("CANDIDATE_JAR", "")
 DEPENDENCY_JARS = [p for p in os.getenv("DEPENDENCY_JARS", "").split("\n") if p.strip()]
 ROWS_URL = os.environ["ROWS_URL"]
-SETUP_URL = os.environ["SETUP_URL"]
-DRIVER_URL = os.environ["DRIVER_URL"]
-NODE_DIR = os.environ["SCENARIO_NODE_DIR"]
+SETUP_URL = os.getenv("SETUP_URL", "")
+DRIVER_URL = os.getenv("DRIVER_URL", "")
+NODE_DIR = os.getenv("SCENARIO_NODE_DIR", "")
 MC_PORT = os.getenv("SCENARIO_MC_PORT", "25565")
 RCON_PORT = os.getenv("SCENARIO_RCON_PORT", "25575")
-RCON_PASSWORD = os.environ["RCON_PASSWORD"]
+RCON_PASSWORD = os.getenv("RCON_PASSWORD", "")
 WORK_DIR = os.getenv("WORK_DIR", "work")
 RESULT_PATH = os.getenv("RESULT_PATH", "result.json")
 MAX_NOT_CHECKED = float(os.getenv("MAX_NOT_CHECKED", "0.10"))
 DRIVER_TIMEOUT = int(os.getenv("DRIVER_TIMEOUT", "1800"))
+# Sharded runs (behaviour-gate.yml): rows per pass job, and the pass a `pass` job plays.
+SHARD_SIZE = int(os.getenv("SHARD_SIZE", "15"))
+SIDE = os.getenv("SIDE", "")          # stable | candidate
+SHARD = os.getenv("SHARD", "")        # a key from shards()
+PASS_DIR = os.getenv("PASS_DIR", "")  # where compare finds every pass job's pass.json
 
 _HEADERS = {"Authorization": f"Bearer {TOKEN}"}
 
@@ -78,7 +84,7 @@ RESULT = {
     "sha": os.getenv("SHA"),
     "baseline": os.path.basename(BASELINE_JAR),
     "candidate": os.path.basename(CANDIDATE_JAR),
-    "candidateSha256": hashlib.sha256(open(CANDIDATE_JAR, "rb").read()).hexdigest(),
+    "candidateSha256": hashlib.sha256(open(CANDIDATE_JAR, "rb").read()).hexdigest() if CANDIDATE_JAR else None,
     "rowsUrl": ROWS_URL,
     "setupUrl": SETUP_URL,
     "driverUrl": DRIVER_URL,
@@ -349,34 +355,16 @@ def not_checked_share(results):
     return (sum(1 for r in rows if r["status"] != "observed") / len(rows)) if rows else 1.0, len(rows)
 
 
-def main():
-    print("=== Behaviour gate (T4) ===\n")
-    os.makedirs(os.path.join(WORK_DIR, "evidence"), exist_ok=True)
-    meta = read_plugin_yml(CANDIDATE_JAR)
-    plugin_name = meta.get("name")
-    package_prefix = package_of(meta)
-    RESULT["plugin"] = plugin_name
-
-    files = {
-        "rows": fetch(ROWS_URL, os.path.join(WORK_DIR, "behaviour.json")),
-        "setup": fetch(SETUP_URL, os.path.join(WORK_DIR, "behaviour-setup.js")),
-        "driver": fetch(DRIVER_URL, os.path.join(WORK_DIR, "behaviour-driver.js")),
-        "lang": extract_lang(CANDIDATE_JAR, os.path.join(WORK_DIR, "lang_en_US.properties")),
-    }
-    table = json.load(open(files["rows"]))
-    if table.get("plugin") != plugin_name:
-        record("behaviour-table", False, f"table is for {table.get('plugin')!r}, candidate is {plugin_name!r}")
-    record("behaviour-table", True, f"{len(table['rows'])} rows, groups {list(table['configGroups'])}")
-
-    if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "first Done", poll=10):
-        record("baseline-boot", False, "the server never reached Done before any jar was deployed")
-
-    deployed = []
-    baseline, RESULT["baselineVersion"] = play(BASELINE_JAR, "stable", table, files, plugin_name, package_prefix, deployed)
-    record("baseline-boot", True, f"v{RESULT['baselineVersion']}")
-    candidate, RESULT["version"] = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed)
-    record("candidate-boot", True, f"v{RESULT['version']}")
-
+def judge(table, files, plugin_name, package_prefix, baseline, candidate, deployed):
+    """Harness share, comparison, replay of changed rows on both jars, verdict. Ends the run."""
+    # The candidate's observed behaviour as a "who can do what" page (gates/behaviour_page.py).
+    try:
+        import behaviour_page
+        page = behaviour_page.render(table, candidate, f"v{RESULT.get('version')}")
+        with open(os.path.join(WORK_DIR, "evidence", "behaviour.md"), "w") as f:
+            f.write(page)
+    except Exception as exc:  # evidence only; never masks the verdict
+        print(f"  behaviour page not written: {exc}")
     for label, results in (("stable", baseline), ("candidate", candidate)):
         share, n = not_checked_share(results)
         if share >= MAX_NOT_CHECKED:
@@ -416,6 +404,146 @@ def main():
     print(f"  {'PASS' if not real else 'FAIL'}: behaviour-diff — {detail}")
     stop_server("final stop")
     finish(not real)
+
+
+def shards(table, size=None):
+    """The table's rows cut into pass-sized pieces, one config group at a time, in table order:
+    [{"key": "<group>-<n>", "group": ..., "ids": [...]}]. `plan` and `compare` both call this, so
+    the shards a run expects are the shards it planned."""
+    size = size or SHARD_SIZE
+    out = []
+    for group in table["configGroups"]:
+        ids = [r["id"] for r in table["rows"] if r["group"] == group]
+        for i in range(0, len(ids), size):
+            out.append({"key": f"{group}-{i // size}", "group": group, "ids": ids[i:i + size]})
+    return out
+
+
+def load_files(lang_from=None):
+    files = {
+        "rows": fetch(ROWS_URL, os.path.join(WORK_DIR, "behaviour.json")),
+        "setup": fetch(SETUP_URL, os.path.join(WORK_DIR, "behaviour-setup.js")) if SETUP_URL else None,
+        "driver": fetch(DRIVER_URL, os.path.join(WORK_DIR, "behaviour-driver.js")) if DRIVER_URL else None,
+        "lang": extract_lang(lang_from, os.path.join(WORK_DIR, "lang_en_US.properties")) if lang_from else None,
+    }
+    return files, json.load(open(files["rows"]))
+
+
+def plan_main():
+    """MODE=plan: print the pass matrix as JSON for the workflow (one entry per shard and side)."""
+    os.makedirs(WORK_DIR, exist_ok=True)
+    _, table = load_files()
+    matrix = [{"side": side, **sh, "ids": ",".join(sh["ids"])} for sh in shards(table) for side in ("stable", "candidate")]
+    print(json.dumps({"include": matrix}))
+
+
+def pass_main():
+    """MODE=pass: play one shard (SHARD) on one jar (SIDE) on a fresh server, and write the outcome
+    beside the boot assertions in RESULT_PATH; `compare` judges. The candidate's plugin.yml and lang
+    file are used for both sides, as in single mode."""
+    print(f"=== Behaviour gate (T4) pass: {SIDE} {SHARD} ===\n")
+    os.makedirs(os.path.join(WORK_DIR, "evidence"), exist_ok=True)
+    meta = read_plugin_yml(CANDIDATE_JAR)
+    plugin_name, package_prefix = meta.get("name"), package_of(meta)
+    RESULT["plugin"] = plugin_name
+    files, table = load_files(lang_from=CANDIDATE_JAR)
+    shard = next((sh for sh in shards(table) if sh["key"] == SHARD), None)
+    if shard is None:
+        record("behaviour-table", False, f"no shard {SHARD!r} in the table")
+    if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "first Done", poll=10):
+        record(f"{'baseline' if SIDE == 'stable' else 'candidate'}-boot", False, "the server never reached Done before any jar was deployed")
+    jar = BASELINE_JAR if SIDE == "stable" else CANDIDATE_JAR
+    results, version = play(jar, SIDE, table, files, plugin_name, package_prefix, [], {shard["group"]: shard["ids"]})
+    RESULT["pass"] = {"side": SIDE, "shard": SHARD, "group": shard["group"], "version": version, "doc": results.get(shard["group"])}
+    stop_server("pass stop")
+    finish(True)
+
+
+def compare_main():
+    """MODE=compare: gather every pass job's result, require one per planned shard and side, then
+    judge exactly as single mode does (the replay of changed rows boots both jars here)."""
+    print("=== Behaviour gate (T4) compare ===\n")
+    os.makedirs(os.path.join(WORK_DIR, "evidence"), exist_ok=True)
+    meta = read_plugin_yml(CANDIDATE_JAR)
+    plugin_name, package_prefix = meta.get("name"), package_of(meta)
+    RESULT["plugin"] = plugin_name
+    files, table = load_files(lang_from=CANDIDATE_JAR)
+    if table.get("plugin") != plugin_name:
+        record("behaviour-table", False, f"table is for {table.get('plugin')!r}, candidate is {plugin_name!r}")
+    record("behaviour-table", True, f"{len(table['rows'])} rows, groups {list(table['configGroups'])}, "
+                                    f"{len(shards(table))} shard(s) of up to {SHARD_SIZE}")
+    passes = {}
+    for root, _, names in os.walk(PASS_DIR):
+        for name in names:
+            if name == "pass.json":
+                doc = json.load(open(os.path.join(root, name)))
+                info = doc.get("pass") or {}
+                passes[(info.get("side"), info.get("shard"))] = doc
+    sides = {"stable": {}, "candidate": {}}
+    for sh in shards(table):
+        for side in sides:
+            doc = passes.get((side, sh["key"]))
+            boot_name = "baseline-boot" if side == "stable" else "candidate-boot"
+            if doc is None:
+                record("behaviour-harness", False, f"no result from the {side} pass of shard {sh['key']} — no verdict")
+            if not doc.get("passed"):
+                failed = next((a for a in doc.get("assertions", []) if not a.get("passed")), {})
+                name = failed.get("name") or "behaviour-harness"
+                record(name if name in (boot_name, "behaviour-harness") else "behaviour-harness", False,
+                       f"{side} pass {sh['key']}: {failed.get('name')}: {failed.get('detail', '')}")
+            info = doc["pass"]
+            if side == "stable":
+                RESULT["baselineVersion"] = info.get("version")
+            else:
+                RESULT["version"] = info.get("version")
+            merged = sides[side].setdefault(sh["group"], {"rows": []})
+            merged["rows"] += (info.get("doc") or {}).get("rows", [])
+            # Keep each pass's driver output as evidence.
+            with open(os.path.join(WORK_DIR, "evidence", f"{side}-{sh['key']}.json"), "w") as f:
+                json.dump(info.get("doc"), f, indent=1)
+    record("baseline-boot", True, f"v{RESULT['baselineVersion']}")
+    record("candidate-boot", True, f"v{RESULT['version']}")
+    if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "first Done", poll=10):
+        record("behaviour-harness", False, "the replay server never reached Done")
+    judge(table, files, plugin_name, package_prefix, sides["stable"], sides["candidate"], [])
+
+
+def main():
+    if MODE == "plan":
+        return plan_main()
+    if MODE == "pass":
+        return pass_main()
+    if MODE == "compare":
+        return compare_main()
+    print("=== Behaviour gate (T4) ===\n")
+    os.makedirs(os.path.join(WORK_DIR, "evidence"), exist_ok=True)
+    meta = read_plugin_yml(CANDIDATE_JAR)
+    plugin_name = meta.get("name")
+    package_prefix = package_of(meta)
+    RESULT["plugin"] = plugin_name
+
+    files = {
+        "rows": fetch(ROWS_URL, os.path.join(WORK_DIR, "behaviour.json")),
+        "setup": fetch(SETUP_URL, os.path.join(WORK_DIR, "behaviour-setup.js")),
+        "driver": fetch(DRIVER_URL, os.path.join(WORK_DIR, "behaviour-driver.js")),
+        "lang": extract_lang(CANDIDATE_JAR, os.path.join(WORK_DIR, "lang_en_US.properties")),
+    }
+    table = json.load(open(files["rows"]))
+    if table.get("plugin") != plugin_name:
+        record("behaviour-table", False, f"table is for {table.get('plugin')!r}, candidate is {plugin_name!r}")
+    record("behaviour-table", True, f"{len(table['rows'])} rows, groups {list(table['configGroups'])}")
+
+    if not wait_for(lambda: DONE_LINE.search(logs_since(datetime.datetime(2000, 1, 1, tzinfo=datetime.timezone.utc))) is not None, 300, "first Done", poll=10):
+        record("baseline-boot", False, "the server never reached Done before any jar was deployed")
+
+    deployed = []
+    baseline, RESULT["baselineVersion"] = play(BASELINE_JAR, "stable", table, files, plugin_name, package_prefix, deployed)
+    record("baseline-boot", True, f"v{RESULT['baselineVersion']}")
+    candidate, RESULT["version"] = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed)
+    record("candidate-boot", True, f"v{RESULT['version']}")
+
+    judge(table, files, plugin_name, package_prefix, baseline, candidate, deployed)
+
 
 
 if __name__ == "__main__":
