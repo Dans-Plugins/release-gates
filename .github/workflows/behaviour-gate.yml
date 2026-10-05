@@ -253,7 +253,7 @@ jobs:
             echo "OVERWRITE_EXISTING_SERVER=true"
             echo "SERVER_MOTD=Behaviour gate"
             echo "MAX_PLAYERS=10"
-            echo "DIFFICULTY=peaceful"
+            echo "DIFFICULTY=easy"   # peaceful regenerates health at once, which hides PvP damage (attackPlayer rows); mobs are off (the driver sets doMobSpawning false)
             echo "GAMEMODE=survival"
             echo "PVP_ENABLED=true"   # PvP rows (attackPlayer) need it; the plugin decides who may hurt whom
             echo "JAVA_OPTS=-Xmx2G -Xms1G"
@@ -460,7 +460,7 @@ jobs:
             echo "OVERWRITE_EXISTING_SERVER=true"
             echo "SERVER_MOTD=Behaviour gate"
             echo "MAX_PLAYERS=10"
-            echo "DIFFICULTY=peaceful"
+            echo "DIFFICULTY=easy"   # peaceful regenerates health at once, which hides PvP damage (attackPlayer rows); mobs are off (the driver sets doMobSpawning false)
             echo "GAMEMODE=survival"
             echo "PVP_ENABLED=true"   # PvP rows (attackPlayer) need it; the plugin decides who may hurt whom
             echo "JAVA_OPTS=-Xmx2G -Xms1G"
