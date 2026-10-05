@@ -27,6 +27,8 @@ def action_label(row):
     """A short human description of a row's action, without its role."""
     item = (row.get("item") or "").replace("_", " ")
     target = _target(row.get("target") or {})
+    if row["action"] == "attackPlayer":
+        return f"hit the {row.get('targetRole')}"
     if row["action"] == "breakBlock":
         text = f"break {target}"
     elif row["action"] == "useOnEntity":
