@@ -74,6 +74,11 @@ on:
         required: false
         type: string
         default: "15"
+      gates_ref:
+        description: "The release-gates tag this workflow was called at (the same as the `uses: ...@<tag>`), so the gate scripts match it"
+        required: false
+        type: string
+        default: ""
       baseline_jar_url:
         required: true
         type: string
@@ -114,8 +119,13 @@ jobs:
     outputs:
       matrix: ${{ steps.plan.outputs.matrix }}
     steps:
+      # Under workflow_call a bare checkout fetches the CALLER's repository; the gates must come
+      # from release-gates at the tag the caller named (gates_ref), or at this run's commit.
       - name: Checkout gates
         uses: actions/checkout@v4
+        with:
+          repository: Dans-Plugins/release-gates
+          ref: ${{ github.repository == 'Dans-Plugins/release-gates' && github.sha || inputs.gates_ref }}
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -147,8 +157,13 @@ jobs:
       fail-fast: false
       matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
     steps:
+      # Under workflow_call a bare checkout fetches the CALLER's repository; the gates must come
+      # from release-gates at the tag the caller named (gates_ref), or at this run's commit.
       - name: Checkout gates
         uses: actions/checkout@v4
+        with:
+          repository: Dans-Plugins/release-gates
+          ref: ${{ github.repository == 'Dans-Plugins/release-gates' && github.sha || inputs.gates_ref }}
 
       - name: Checkout OMCSI
         uses: actions/checkout@v4
@@ -343,8 +358,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
+      # Under workflow_call a bare checkout fetches the CALLER's repository; the gates must come
+      # from release-gates at the tag the caller named (gates_ref), or at this run's commit.
       - name: Checkout gates
         uses: actions/checkout@v4
+        with:
+          repository: Dans-Plugins/release-gates
+          ref: ${{ github.repository == 'Dans-Plugins/release-gates' && github.sha || inputs.gates_ref }}
 
       - name: Checkout OMCSI
         uses: actions/checkout@v4
