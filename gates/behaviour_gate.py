@@ -357,6 +357,14 @@ def not_checked_share(results):
 
 def judge(table, files, plugin_name, package_prefix, baseline, candidate, deployed):
     """Harness share, comparison, replay of changed rows on both jars, verdict. Ends the run."""
+    # The candidate's observed behaviour as a "who can do what" page (gates/behaviour_page.py).
+    try:
+        import behaviour_page
+        page = behaviour_page.render(table, candidate, f"v{RESULT.get('version')}")
+        with open(os.path.join(WORK_DIR, "evidence", "behaviour.md"), "w") as f:
+            f.write(page)
+    except Exception as exc:  # evidence only; never masks the verdict
+        print(f"  behaviour page not written: {exc}")
     for label, results in (("stable", baseline), ("candidate", candidate)):
         share, n = not_checked_share(results)
         if share >= MAX_NOT_CHECKED:
