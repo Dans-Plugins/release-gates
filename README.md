@@ -489,6 +489,24 @@ the calling run, so a plugin's pull-request workflow can gate its own build. A c
 `behaviour.md`, a "who can do what" table of the candidate's observed outcomes
 (`gates/behaviour_page.py`).
 
+Inputs — the same for `workflow_dispatch` and `workflow_call`, except the two marked
+call-only:
+
+| Input | Required | Meaning |
+|---|---|---|
+| `repository` | yes | `owner/repo` of the plugin — recorded in the result and in the `plan` job's name |
+| `sha` | yes | commit the candidate was built from — recorded in the result |
+| `jar_url` | no | where to download the candidate; one of `jar_url` and `candidate_artifact` must be given |
+| `candidate_artifact` | no (call-only) | name of an artifact of the calling run holding the candidate jar (the first non-`original-` jar in it); used instead of `jar_url` |
+| `baseline_jar_url` | yes | where to download the current stable jar the candidate is compared with |
+| `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list; each one's `/releases/latest` jar is installed beside both jars, exactly as in the boot gate |
+| `minecraft_version` | no | Spigot version to boot (default `26.1`: bots join only versions the pinned mineflayer knows) |
+| `rows_url` | yes | raw URL of the behaviour table (`scenarios/<plugin>-behaviour.json` in plugin-fixtures) |
+| `setup_url` | yes | raw URL of the table's setup module (`scenarios/<plugin>-behaviour-setup.js`) |
+| `driver_url` | no | raw URL of the behaviour driver (default plugin-fixtures `main` `scenarios/behaviour-driver.js`) |
+| `shard_size` | no | rows per pass job (default `15`); each shard runs on its own server |
+| `gates_ref` | no (call-only) | the release-gates tag the caller's `uses: …@<tag>` names, so the gate scripts are checked out at that tag |
+
 Within each pass, for the jar and the shard's config group: the server stops, the table's `dataPaths` are deleted, the jar and its dependencies are
 deployed, the server boots (and boots again after the group's config overrides), and the driver
 plays the group's rows. Each row's outcome is read from the world and paired with a control row;
@@ -500,14 +518,16 @@ rows a bot could not decide are `not-checked` and never compared.
 | `baseline-boot`, `candidate-boot` | each jar enables without attributable errors for every group |
 | `behaviour-harness` | both passes ran and fewer than 10 % of either pass's rows are not checked; otherwise there is no verdict |
 | `behaviour-diff` | no row changed. A row that changed is replayed once on both jars and counts only if it changes again (reported as `flaky` otherwise); a difference only in the refusal message's lang key is `message-changed` and never fails |
+| `behaviour-spec` | no reviewed expectation is contradicted by the candidate alone (see Spec mode below); recorded after `behaviour-diff`, and the gate passes only when both hold |
 
 **Spec mode** (Stephenson-Software RFC 0019, v22): a row may carry `expect: {effect, refusal?,
 source, reviewed, note?}`, where `source` is `<owner>/<repo>/<path>@<sha>#L<a>[-L<b>]`, the doc line
 that promises the behaviour, pinned to a commit. Every reviewed expectation is checked on both jars
 (`gates/behaviour_spec.py`): `ok`; `mismatch` (the candidate contradicts the docs and the stable did
 not; replayed once on the candidate, then fails `behaviour-spec`); `pre-existing` (both jars
-contradict the docs; reported, never fails); `fixed`; `source-missing` (the cited file or lines do
-not exist; not enforced); `unchecked`. Rows without a reviewed expectation get a proposal in
+contradict the docs; reported, never fails); `fixed`; `flaky` (a candidate-only mismatch that did
+not recur on the replay; never fails); `source-missing` (the cited file or lines do not exist; not
+enforced); `unchecked`. Rows without a reviewed expectation get a proposal in
 `evidence/expectations-proposed.json`. The page marks a contradicted cell `≠`, and `result.json`
 carries the page (`page`) and the per-row spec results (`spec`).
 
@@ -519,7 +539,8 @@ not necessarily a bug: RFC 0017 keeps T4 advisory until the owner makes it requi
 ## Evidence
 
 Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `server.log`
-(the full console). Each also holds `usage-reporting.txt` — the wrapper's
+(the full console; the behaviour gate's logs are named per job, see below). Each but the
+behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 `USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
 (see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
 
@@ -553,6 +574,17 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
   (plus `baselineCloseFailure` when the control phase left a trace file, and
   `closeFailureWithBrokenDependents` when a close failure was excused by a pre-existing
   dependent) and `trace-files/` (every trace file a stop check blamed).
+- Behaviour gate: `behaviour-<run id>`, uploaded by the `compare` job —
+  `{gate, repository, sha, baseline, candidate, candidateSha256, rowsUrl, setupUrl, driverUrl, plugin, baselineVersion, version, passed, rows: [{group, id, result, stable, candidate}], spec: [{id, group, expect, stable, candidate, status}], page, assertions, startedAt, finishedAt}`
+  — `rows` holds every compared row (`same`, `changed`, `message-changed`, `flaky`,
+  `not-compared`) with each jar's outcome, or the driver's reason when a row was not observed;
+  `spec` and `page` are as in [Spec mode](#behaviour-gate). Its server log is
+  `server-replay.log` (the compare job's own server, where jars are deployed only for replays), beside
+  `behaviour.md`, `expectations-proposed.json`, `<side>-<shard>.json` (each pass's driver
+  output) and the replays' driver output and logs. No `usage-reporting.txt` is collected.
+  Each pass job also uploads `behaviour-pass-<side>-<shard>`: its `pass.json` (the boot
+  assertions and `pass: {side, shard, group, version, doc}`), its driver output and log, and
+  `server-<side>-<shard>.log`.
 
 ## Usage reporting
 

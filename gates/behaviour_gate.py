@@ -15,17 +15,26 @@ single flaky run cannot fail the gate.
 
 Assertions (result.json, like every gate):
 
+  behaviour-table                  the table is for the candidate's plugin
   baseline-boot / candidate-boot   each jar enables cleanly on fresh data for every config group
   behaviour-harness                both passes ran, and fewer than MAX_NOT_CHECKED of the rows of
                                    either pass are not-checked; otherwise the run gives no verdict
   behaviour-diff                   no row changed. Rows whose only difference is the refusal
                                    message's lang key are listed as message-changed and never
                                    fail it.
+  behaviour-spec                   no reviewed expectation (RFC 0019) is contradicted by the
+                                   candidate alone, after one replay (gates/behaviour_spec.py)
 
-The verdict of `behaviour-diff` is the gate's verdict; quartermaster decides whether it blocks a
-release (RFC 0017: advisory until the owner makes it required per plugin).
+The verdict of `behaviour-diff` and `behaviour-spec` together is the gate's verdict; quartermaster
+decides whether it blocks a release (RFC 0017: advisory until the owner makes it required per
+plugin).
 
 Environment:
+  MODE                             single (default) | plan | pass | compare — see main()
+  SIDE, SHARD                      pass mode: the jar (stable | candidate) and the shard key to play
+  SHARD_SIZE                       rows per shard, default 15
+  PASS_DIR                         compare mode: where every pass job's pass.json was downloaded
+  DRIVER_TIMEOUT                   seconds per driver run, default 1800
   OMCSI_API_BASE, OMCSI_DEPLOY_TOKEN, OMCSI_CONTAINER_NAME   as for the other gates
   BASELINE_JAR, CANDIDATE_JAR      local paths
   DEPENDENCY_JARS                  newline-separated local paths, deployed beside both
