@@ -303,8 +303,9 @@ def run_driver(files, group, label, only=None):
     return json.load(open(out_json)), ""
 
 
-def play(jar, label, table, files, plugin_name, package_prefix, deployed, only_by_group=None):
-    """Run every config group (or only the given rows) on `jar`, each on fresh plugin data."""
+def play(jar, label, table, files, plugin_name, package_prefix, deployed, only_by_group=None, replay=False):
+    """Run every config group (or only the given rows) on `jar`, each on fresh plugin data. Only a
+    `replay` is labelled `<label>-replay`; a pass job's shard is filtered too, but is a first play."""
     results = {}
     version = None
     for group, overrides in table["configGroups"].items():
@@ -313,7 +314,7 @@ def play(jar, label, table, files, plugin_name, package_prefix, deployed, only_b
             only = only_by_group.get(group)
             if not only:
                 continue
-        print(f"\n[{label}] group {group}" + (f" (replay {len(only)} row(s))" if only else ""))
+        print(f"\n[{label}] group {group}" + (f" ({'replay' if replay else 'shard of'} {len(only)} row(s))" if only else ""))
         stop_server(f"{label} {group} stop")
         wipe(table.get("dataPaths") or [f"plugins/{plugin_name}"])
         for name in deployed:
@@ -328,7 +329,7 @@ def play(jar, label, table, files, plugin_name, package_prefix, deployed, only_b
         if overrides:
             write_config_overrides(plugin_name, overrides)
             version = boot(f"{label}-boot", plugin_name, package_prefix)
-        doc, err = run_driver(files, group, label + ("-replay" if only else ""), only)
+        doc, err = run_driver(files, group, label + ("-replay" if replay else ""), only)
         if doc is None:
             record("behaviour-harness", False, f"{label} {group}: {err}")
         results[group] = doc
@@ -380,8 +381,8 @@ def judge(table, files, plugin_name, package_prefix, baseline, candidate, deploy
     confirmed = {}
     if any(changed.values()):
         print(f"\n[replay] {sum(len(v) for v in changed.values())} changed row(s) on both jars")
-        rb, _ = play(BASELINE_JAR, "stable", table, files, plugin_name, package_prefix, deployed, changed)
-        rc, _ = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed, changed)
+        rb, _ = play(BASELINE_JAR, "stable", table, files, plugin_name, package_prefix, deployed, changed, replay=True)
+        rc, _ = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed, changed, replay=True)
         for g, ids in changed.items():
             if not ids:
                 continue
@@ -437,7 +438,7 @@ def judge_spec(table, files, plugin_name, package_prefix, baseline, candidate, d
         for e in mism:
             by_group.setdefault(e["group"], []).append(e["id"])
         print(f"\n[replay] {len(mism)} spec mismatch(es) on the candidate")
-        again, _ = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed, by_group)
+        again, _ = play(CANDIDATE_JAR, "candidate", table, files, plugin_name, package_prefix, deployed, by_group, replay=True)
         replayed = {r["id"]: r for doc in again.values() if doc for r in doc["rows"]}
         for e in mism:
             if behaviour_spec.check(e["expect"], replayed.get(e["id"]), rows[e["id"]], table) != "mismatch":
