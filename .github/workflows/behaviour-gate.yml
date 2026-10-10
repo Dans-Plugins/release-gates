@@ -560,6 +560,17 @@ jobs:
                   print(f"| {x['group']} | {x['id']} | {x['result']} | `{json.dumps(x['stable'])}` | `{json.dumps(x['candidate'])}` |")
               print()
           print(f"{sum(1 for x in r.get('rows', []) if x['result'] == 'same')} row(s) unchanged.\n")
+          # Spec mode: every reviewed expectation not met, with what the docs promised and where.
+          spec_off = [e for e in r.get("spec", []) if e["status"] != "ok"]
+          if spec_off:
+              print("| group | row | spec | stable | candidate | expected effect | expected refusal | source |\n|---|---|---|---|---|---|---|---|")
+              for e in spec_off:
+                  x = e.get("expect") or {}
+                  print(f"| {e['group']} | {e['id']} | {e['status']} | {e.get('stable')} | {e.get('candidate')} | "
+                        f"`{json.dumps(x.get('effect'))}` | `{json.dumps(x.get('refusal'))}` | `{x.get('source')}` |")
+              print()
+          if r.get("spec"):
+              print(f"{sum(1 for e in r['spec'] if e['status'] == 'ok')} reviewed expectation(s) met.\n")
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:
               print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")

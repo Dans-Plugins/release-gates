@@ -581,9 +581,13 @@ behaviour gate's also holds `usage-reporting.txt` — the wrapper's
   `spec` and `page` are as in [Spec mode](#behaviour-gate). Its server log is
   `server-replay.log` (the compare job's own server, where jars are deployed only for replays), beside
   `behaviour.md`, `expectations-proposed.json`, `<side>-<shard>.json` (each pass's driver
-  output) and the replays' driver output and logs. No `usage-reporting.txt` is collected.
+  output) and the replays' driver output and logs (`<side>-replay-<group>.json` / `.log`).
+  No `usage-reporting.txt` is collected. Besides the assertions, its job summary lists every row
+  whose result is not `same` and every `spec` entry whose status is not `ok`, with the expected
+  effect, refusal and `source`.
   Each pass job also uploads `behaviour-pass-<side>-<shard>`: its `pass.json` (the boot
-  assertions and `pass: {side, shard, group, version, doc}`), its driver output and log, and
+  assertions and `pass: {side, shard, group, version, doc}`), its driver output and log
+  (`<side>-<group>.json` / `.log` — a first play, never labelled a replay), and
   `server-<side>-<shard>.log`.
 
 ## Usage reporting
