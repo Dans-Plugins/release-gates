@@ -208,50 +208,57 @@ Assertions, in order — the run stops at the first failure:
    baseline logs `Enabling <name> v<version>` with no enable failure and no error attributable
    to it. With a supplied fixture this boot is already over that data. When Bukkit prints an
    exception after `Error occurred while enabling`, that line is quoted in the detail.
-3. **config-overrides** — the overrides are applied — the backend's own keys on top of the
+3. **fixture-expected** — only with `fixture_url`, and judged on the baseline's *first* boot
+   over the fixture (step 2, before any scenario adds to it): every label in the manifest's
+   `expected` is logged by the baseline with that count. A stable release that does not load what the
+   fixture promises is a finding about the stable release, and nothing about the candidate
+   can be concluded from it.
+4. **baseline-migration** — only with `backend: json` and a baseline whose first boot loaded
+   data: a baseline whose config declares `storage.type` is moved to JSON the way an operator
+   does it — `faction migrate toJson` on the store its data is in, before the JSON keys are
+   applied — so the data comes along instead of being left behind on the default store. It
+   fails when the migration does not complete; otherwise it is recorded after
+   **config-overrides**, when the baseline's restart on JSON must log the same counts as its
+   first boot. Passes as "not applicable" when the baseline declares no `storage.type`.
+5. **config-overrides** — the overrides are applied — the backend's own keys on top of the
    caller's — and the baseline enables again over the edited config. Passes with "none" when
    there are none.
-4. **scenario** — each command is sent over the console; once the console has been quiet for
+6. **scenario** — each command is sent over the console; once the console has been quiet for
    5 s, no error is attributable to the baseline. Passes with "none" when no scenario was given.
    Then **bot-scenario** — the `scenario_script` is fetched and run against the baseline with
    bots joined to the server; it must exit 0 within 15 minutes, and no error may be
    attributable to the baseline while it runs. Its stdout is the evidence (`bot-scenario.log`).
    Passes with "none" when no script was given.
-5. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
+7. **baseline-restart** — the baseline enables over its own data. Every `<n> <label> loaded`
    line it prints during this boot (Medieval Factions prints `3 factions loaded (5ms)`) is
    captured as the reference count for that label. Then **bot-scenario-counts** — the counts
    the script said to expect (its `SCENARIO_EXPECTED` line) match what the scenario *added*:
    those reference counts minus what the baseline's first boot loaded (zero on a fresh
    server, the fixture's contents when `fixture_url` was given), label by label; a label the
    baseline does not log is reported. Passes with "none" when no script was given.
-6. **fixture-expected** — only with `fixture_url`, and judged on the baseline's *first* boot
-   over the fixture (step 3, before any scenario adds to it): every label in the manifest's
-   `expected` is logged by the baseline with that count. A stable release that does not load what the
-   fixture promises is a finding about the stable release, and nothing about the candidate
-   can be concluded from it.
-7. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
+8. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
    `extra_data_paths` are copied out, listed (size and sha256) and archived. At least one file
    must have been captured. With a supplied fixture this is that fixture as the baseline left it.
    On a database backend the database's contents are dumped beside them as `db-dump.sql`.
-8. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
+9. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
    logs `Enabling <name> v<version>` (equal to `expected_version` when given); no enable
    failure, no `Could not load` / `UnknownDependencyException`, no `ERROR`/`SEVERE` line naming
    the plugin and no stack frame inside its package.
-9. **counts-1** — every label the baseline logged is logged by the candidate with the same
+10. **counts-1** — every label the baseline logged is logged by the candidate with the same
    count. A label that appears on only one side is reported, not failed (plugins change their
    log lines). Passes with "baseline logged no counts" when there were none. With a supplied
    fixture, every label in the manifest's `expected` must also be logged with that count plus
-   whatever the scenario added on top of the fixture (step 5's delta) — a label the manifest
+   whatever the scenario added on top of the fixture (step 7's delta) — a label the manifest
    promises and the candidate no longer logs fails here.
-10. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
+11. **files-kept-1** — every file in the fixture still exists: at its path (content may change),
    or — a migration — as a byte-identical copy under the same name inside `plugins/<Name>/`.
    A removed file fails; a same-named file with different content does not count as migrated.
    Added files are reported. On a database backend `db-dump.sql` is re-dumped and tracked like
    any other file: it must still be producible, and its content is expected to change.
-11. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` / `File corrupted while reading record` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked. An external database leaves no trace file; the console lines are still checked.
-12. **candidate-boot-k**, **counts-k**, **files-kept-k**, **stop-k** for k = 2 … `restart_cycles` + 1
+12. **stop-1** — the server stops within two minutes with no error attributable to the candidate, **and the database closed cleanly**: no `*.trace.db` under the server root that is new or has grown since the fixture was recorded, and the console has no `zip file closed` / `MVStoreException` / `OnExitDatabaseCloser` / `File corrupted while reading record` line. A trace file the *baseline* left behind on its own shutdowns is reported in `result.json` as `baselineCloseFailure` — a finding about the current stable release — and is not held against the candidate. An embedded store that fails to close on shutdown is a slow, silent path to a corrupt save, so it blocks regardless of how the boot looked. An external database leaves no trace file; the console lines are still checked.
+13. **candidate-boot-k**, **counts-k**, **files-kept-k**, **stop-k** for k = 2 … `restart_cycles` + 1
     — the same, over the data the candidate itself wrote, one full stop/start cycle per k.
-13. **migration-roundtrip** (`backend: json` only) — the candidate is booted on the store it
+14. **migration-roundtrip** (`backend: json` only) — the candidate is booted on the store it
     has been running on, its storage migration command is run to the other store, the
     server is restarted on that store and every count must equal the baseline's (and the
     manifest's `expected`, with a supplied fixture); the original store is then emptied (its
@@ -312,7 +319,7 @@ point a `mariadb` run back at H2 by accident.
 | `h2` | the plugin's embedded H2 file, exactly as an operator gets it by default | none | `plugins/<Name>/` + `extra_data_paths` | the `*.trace.db` check is what catches a store that fails to close |
 | `mariadb` | `mariadb:11` in a container named `mfdb` on the server's compose network, started before any jar is deployed and kept for the whole run | `database.url: jdbc:mariadb://mfdb:3306/mf`, `database.dialect: MARIADB`, `database.username`/`password` | the same, plus `db-dump.sql` (`mariadb-dump --skip-dump-date`) | one database spans both phases: the candidate migrates the schema the stable created (Flyway), which is the point |
 | `postgres` | `postgres:16`, likewise | `database.url: jdbc:postgresql://mfdb:5432/mf`, `database.dialect: POSTGRES`, username/password | the same, plus `db-dump.sql` (`pg_dump`) | the dialect names are jOOQ's `SQLDialect` enum names, which is how the plugin reads the key |
-| `json` | the plugin's JSON store | `storage.type: json`, `storage.json.path: ./medieval_factions_data` — **only when the baseline's config declares `storage.type`**; a baseline without a JSON store (Medieval Factions 5.x) stays on its default store and the fixture is that store's | `plugins/<Name>/` + the JSON directory (+ `extra_data_paths`) | after the restart cycles the candidate's `faction migrate toJson` / `toDatabase` is exercised both ways (**migration-roundtrip**) |
+| `json` | the plugin's JSON store | `storage.type: json`, `storage.json.path: ./medieval_factions_data` — **only when the baseline's config declares `storage.type`**; a baseline without a JSON store (Medieval Factions 5.x) stays on its default store and the fixture is that store's | `plugins/<Name>/` + the JSON directory (+ `extra_data_paths`) | a baseline that loaded data is first moved to JSON with `faction migrate toJson` (**baseline-migration**), so the switch does not leave its data behind; after the restart cycles the candidate's `faction migrate toJson` / `toDatabase` is exercised both ways (**migration-roundtrip**) |
 
 The baseline's very first boot always runs on the plugin's shipped defaults (the config file
 does not exist before it), so on `mariadb`/`postgres`/`json` an untouched default H2 file from

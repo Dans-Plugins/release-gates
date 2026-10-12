@@ -17,6 +17,13 @@ It asserts, in order:
                      user; every path the manifest lists exists
   baseline-boot      dependency jars + the baseline jar are deployed; after a restart the
                      baseline reports Enabling with no error attributable to it
+  fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
+                     logged by the baseline's first boot over the fixture with that count,
+                     before any scenario has added to it
+  baseline-migration (json backend, a baseline with a JSON store and data) the baseline moves its
+                     data to JSON with the plugin's migration command before `storage.type: json`
+                     is applied, and restarts on JSON with the same counts — a pass is recorded
+                     after config-overrides, whose restart it is judged on
   config-overrides   `dotted.key: value` lines are applied to plugins/<Name>/config.yml and
                      the baseline enables again over the edited config ("none" when empty)
   scenario           console commands are sent ~3s apart; once the console has been quiet
@@ -32,12 +39,6 @@ It asserts, in order:
                      a fresh server; the fixture's contents when one was supplied) — so a
                      script that creates two factions over a fixture holding fourteen expects
                      2, not 16 ("none" when no script)
-  baseline-migration (json backend, a baseline with a JSON store and data) the baseline moves its
-                     data to JSON with the plugin's migration command before `storage.type: json`
-                     is applied, and restarts on JSON with the same counts
-  fixture-expected   (supplied fixture only) every label in the manifest's `expected` is
-                     logged by the baseline's first boot over the fixture with that count,
-                     before any scenario has added to it
   fixture            the server is stopped; plugins/<Name> and every extra data path are
                      copied out, listed (size, sha256) and archived; at least one file
   candidate-boot-1   the baseline jar is removed and the candidate deployed; the candidate
