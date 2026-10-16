@@ -144,7 +144,8 @@ Assertions, in order:
 2. **get-<slug>** — `dpm get <slug>` reports `Downloaded` (or `already up to date`) rather than
    `Plugin not found`, a GitHub error, or no release; and the jar DPM wrote to `plugins/<slug>.jar`
    carries a readable `plugin.yml`, from which the plugin's real name is taken.
-3. **boot** — the server reaches `Done` over the plugins DPM installed (fatal).
+3. **boot** — the server stops after the `dpm get`s and reaches `Done` over the plugins DPM
+   installed (fatal).
 4. **enable-<slug>** — the plugin logs `Enabling <name> v<version>`; no
    `Error occurred while enabling <name>`, `Could not load 'plugins/<slug>.jar'` or
    `Disabling <name>` line and no `UnknownDependencyException` for `<slug>.jar`; no
@@ -552,7 +553,7 @@ behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 (see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
 
 - Boot gate: `boot-gate-<run id>` —
-  `{gate, repository, sha, candidate, plugin, version, candidateSha256, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
+  `{gate, repository, sha, candidate, plugin, version, candidateSha256, minecraftVersion, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
   plus the plugin's data folder.
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.

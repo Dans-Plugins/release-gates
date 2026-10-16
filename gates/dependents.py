@@ -31,10 +31,14 @@ stable jar are deployed together on one server, which is then booted twice. It a
                         its dependents can be concluded)
   enable-<Name>-1       the dependent reports Enabling; no `Error occurred while enabling`,
                         no `Could not load 'plugins/<jar>'` / UnknownDependencyException,
-                        no ERROR/SEVERE line naming it and no stack frame in its package
+                        no `Disabling <Name>`, no ERROR/SEVERE line naming it and no stack
+                        frame in its package
   stop-1                the server stops within the timeout with no error attributable to
                         the candidate or any dependent, and the database closed cleanly:
-                        no *.trace.db appeared and no close-failure line was printed
+                        no *.trace.db that is new or has grown since the control phase (any
+                        at all without one) and no close-failure line was printed. With a
+                        pre-existing dependent installed a close failure is reported
+                        (closeFailureWithBrokenDependents) but passes
   boot-2, candidate-enabled-2, enable-<Name>-2, stop-2
                         the same, over the data folders the first boot wrote
 
