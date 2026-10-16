@@ -12,7 +12,8 @@ Dan's Plugin Manager's integration test uses) and reads the server's console fro
   dpm           the server reaches "Done" with Dan's Plugin Manager enabled
   get-<slug>     `dpm get <slug>` reports a download (or "already up to date"), and the jar
                  DPM wrote to the plugins folder carries a readable plugin.yml
-  boot           the server reaches "Done" over the plugins DPM installed
+  boot           the server stops after the `dpm get`s and reaches "Done" over the plugins
+                 DPM installed
   enable-<slug>  the plugin logs `Enabling <name> v<version>`; no enable failure; no
                  ERROR/SEVERE line or stack frame attributable to it
   stop           the server stops within the timeout with no error attributable to any of them
