@@ -621,8 +621,9 @@ Gate servers stay counted, but as CI: every usage event a gate server sends carr
 
   A fixture's own copy of that file is overwritten before any plugin enables, and the file is
   left out of the save-compatibility gate's `files-kept` comparison. The file is read back
-  after writing; if it cannot be written, or reads back different, the server is not started:
-  the assertion for that boot (`boot-<n>` and the like) fails with the path and the error in
+  after writing; if `plugins/` cannot be listed, or the file cannot be written or reads back
+  different, the server is not started: the assertion for that boot (`boot-<n>` and the like)
+  fails with the path and the error in
   its detail, and the run ends there — in every gate, including the ones that otherwise run
   per-plugin checks to completion.
 
