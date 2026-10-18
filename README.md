@@ -36,7 +36,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 Assertions, in order — the run stops at the first failure:
 
 1. **dependencies** — every `depend:` in the candidate's `plugin.yml` is satisfied by a supplied jar.
-   **minecraft-version** — after the server's first start, before the candidate is deployed: the server reports `Starting minecraft server version <minecraft_version>`, so a run cannot pass on a version other than the one asked for.
+   **minecraft-version** — after the server's first start, before the candidate is deployed: the server reports `Starting minecraft server version <minecraft_version>`, so a run cannot pass on a version other than the one asked for. Not recorded when `minecraft_version` is passed empty.
 2. **boot-1** — the server reaches `Done`; the candidate logs `Enabling <name> v<version>`; no `Error occurred while enabling <name>`, `Could not load 'plugins/<jar>'`, `UnknownDependencyException` or `Disabling <name>` line; no `ERROR`/`SEVERE` line naming the plugin and no stack frame inside its package.
 3. **version** — the enabled version equals `expected_version` (when given).
 4. **plugins-1** — `plugins` lists the candidate.
@@ -46,7 +46,8 @@ Assertions, in order — the run stops at the first failure:
 
 Between **dependencies** and **boot-1** the jars are deployed onto the server's own first
 start; a server that never starts, never reaches `Done` or does not stop before the candidate
-boots fails as **baseline** — an image or runner problem, not the candidate's.
+boots fails as **baseline** — an image or runner problem, not the candidate's. The started and
+`Done` checks come before **minecraft-version**, the stop check after the jars are deployed.
 
 ### Several Minecraft versions
 
@@ -551,6 +552,8 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 `USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
 (see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
+Every gate's `result.json` also carries `startedAt` and `finishedAt` (UTC, ISO 8601), whether
+or not its field list below names them.
 
 - Boot gate: `boot-gate-<run id>` —
   `{gate, repository, sha, candidate, plugin, version, candidateSha256, minecraftVersion, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
@@ -617,7 +620,12 @@ Gate servers stay counted, but as CI: every usage event a gate server sends carr
   ```
 
   A fixture's own copy of that file is overwritten before any plugin enables, and the file is
-  left out of the save-compatibility gate's `files-kept` comparison.
+  left out of the save-compatibility gate's `files-kept` comparison. The file is read back
+  after writing; if `plugins/` cannot be listed, or the file cannot be written or reads back
+  different, the server is not started: the assertion for that boot (`boot-<n>` and the like)
+  fails with the path and the error in
+  its detail, and the run ends there — in every gate, including the ones that otherwise run
+  per-plugin checks to completion.
 
   Reporting stays enabled unless a jar in `plugins/` carries a trace client older than 0.3.0
   (the save-compatibility baseline is often one). Such a client reads `enabled:` but not
