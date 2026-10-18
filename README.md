@@ -525,9 +525,19 @@ rows a bot could not decide are `not-checked` and never compared.
 |---|---|
 | `behaviour-table` | the table is for the candidate's plugin |
 | `baseline-boot`, `candidate-boot` | each jar enables without attributable errors for every group |
+| `config-overrides` | recorded only when it fails: a group's overrides could not be applied to `plugins/<Name>/config.yml` (the file could not be read or written back) |
 | `behaviour-harness` | both passes ran and fewer than 10 % of either pass's rows are not checked; otherwise there is no verdict |
 | `behaviour-diff` | no row changed. A row that changed is replayed once on both jars and counts only if it changes again (reported as `flaky` otherwise); a difference only in the refusal message's lang key is `message-changed` and never fails |
 | `behaviour-spec` | no reviewed expectation is contradicted by the candidate alone (see Spec mode below); recorded after `behaviour-diff`, and the gate passes only when both hold |
+
+A pass job stops at its first failure and records its jar's boots in `pass.json` under the
+side's name — `stable-boot` or `candidate-boot` (a server that never reaches `Done` before any
+jar is deployed is `baseline-boot` / `candidate-boot`). `compare` carries a failed pass into
+`result.json` under the same name when it is that side's `baseline-boot` / `candidate-boot` or
+`behaviour-harness`, and otherwise — `stable-boot` and `config-overrides` included — as
+`behaviour-harness`, with the pass, the failed assertion's name and its detail in the detail.
+Boots for a replay run in the `compare` job itself and are recorded there as `stable-boot` /
+`candidate-boot`.
 
 **Spec mode** (Stephenson-Software RFC 0019, v22): a row may carry `expect: {effect, refusal?,
 source, reviewed, note?}`, where `source` is `<owner>/<repo>/<path>@<sha>#L<a>[-L<b>]`, the doc line

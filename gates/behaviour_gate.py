@@ -17,6 +17,10 @@ Assertions (result.json, like every gate):
 
   behaviour-table                  the table is for the candidate's plugin
   baseline-boot / candidate-boot   each jar enables cleanly on fresh data for every config group
+                                   (a pass job and a replay record its boots as stable-boot /
+                                   candidate-boot; compare_main carries a failed pass over)
+  config-overrides                 recorded only on failure: a group's overrides could not be
+                                   applied to plugins/<Name>/config.yml
   behaviour-harness                both passes ran, and fewer than MAX_NOT_CHECKED of the rows of
                                    either pass are not-checked; otherwise the run gives no verdict
   behaviour-diff                   no row changed. Rows whose only difference is the refusal
