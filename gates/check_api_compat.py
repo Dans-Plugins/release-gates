@@ -18,7 +18,7 @@ For every supported version, this downloads that version's spigot-api jar and ch
   kind     a method referenced as a class method is on a class, and one referenced as an
            interface method is on an interface
   java     no class in the jar is compiled for a newer Java than the version can run on: the
-           oldest Java it supports (16 for 1.17, 17 up to 1.20.4, 21 up to 1.21.x, 25 from
+           oldest Java it supports (8 below 1.17, 16 for 1.17, 17 up to 1.20.4, 21 up to 1.21.x, 25 from
            26.x). A server on that Java cannot load such a class at all (Herald compiled for
            Java 21 failed to load on 1.19.4). Multi-release entries under META-INF/versions/
            are skipped: the JVM only loads the ones it can run.
@@ -41,7 +41,16 @@ A PATH is the plugin jar or a directory holding it (`target`, `build/libs`); dir
 do not exist are skipped, so one command serves Maven and Gradle builds. Exactly one plugin
 jar must be found: a jar with a plugin.yml, not `original-*`, `*-sources`, `*-javadoc` or
 `*-plain`. When Gradle's shadow plugin leaves a thin jar beside a single shaded `*-all` jar,
-the shaded one is checked: it is what ships. Exits 1 and lists every problem, per version, when any reference does not resolve.
+the shaded one is checked: it is what ships. `--exclude` also accepts a dotted package (`a.b`).
+
+Exits 1 and lists every problem, per version, when any reference does not resolve. Also exits 1
+when nothing could be checked: not exactly one plugin jar, no class in it references Bukkit, or
+a listed version's spigot-api cannot be downloaded. Exits 2 when no PATH is given.
+
+Environment:
+  API_COMPAT_CACHE  where spigot-api jars are kept after their first download
+                    (default ~/.cache/api-compat)
+
 Only the standard library is used.
 """
 
