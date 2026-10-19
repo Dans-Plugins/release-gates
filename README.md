@@ -97,8 +97,8 @@ class that changed between enum and interface — and that no class is compiled 
 Java than that version runs on (8 below 1.17, 16 for 1.17, 17 up to 1.20.4, 21 from 1.20.5
 through 1.21.x, 25 from 26.x: Herald, compiled for Java 21, could not load on 1.19.4 at all). A
 listed version with no `spigot-api` snapshot to download fails the check with the download
-error. It takes seconds and needs only Python 3; each `spigot-api` jar is downloaded once into `~/.cache/api-compat`, or the
-directory named by `API_COMPAT_CACHE`.
+error. It takes seconds and needs only Python 3; each `spigot-api` jar is downloaded once
+into `~/.cache/api-compat`, or the directory named by `API_COMPAT_CACHE`.
 
 It exists because of Medieval Factions 6.0.0: built against 1.21.11, it referenced
 `PotionType.LONG_POISON`, which only exists from 1.20.5, and failed to enable on 1.19.4

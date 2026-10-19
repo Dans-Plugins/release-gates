@@ -18,8 +18,8 @@ For every supported version, this downloads that version's spigot-api jar and ch
   kind     a method referenced as a class method is on a class, and one referenced as an
            interface method is on an interface
   java     no class in the jar is compiled for a newer Java than the version can run on: the
-           oldest Java it supports (8 below 1.17, 16 for 1.17, 17 up to 1.20.4, 21 up to 1.21.x, 25 from
-           26.x). A server on that Java cannot load such a class at all (Herald compiled for
+           oldest Java it supports (8 below 1.17, 16 for 1.17, 17 up to 1.20.4, 21 up to
+           1.21.x, 25 from 26.x). A server on that Java cannot load such a class at all (Herald compiled for
            Java 21 failed to load on 1.19.4). Multi-release entries under META-INF/versions/
            are skipped: the JVM only loads the ones it can run.
 
