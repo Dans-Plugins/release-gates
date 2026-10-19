@@ -94,9 +94,11 @@ above). This check is the fast half, and runs on every build: for each listed ve
 downloads that version's `spigot-api` jar and checks that every `org/bukkit` class, field and
 method the built jar references resolves there, the way the JVM resolves it — including a
 class that changed between enum and interface — and that no class is compiled for a newer
-Java than that version runs on (17 up to 1.20.4, 21 up to 1.21.x, 25 from 26.x: Herald,
-compiled for Java 21, could not load on 1.19.4 at all). It takes seconds and needs only
-Python 3.
+Java than that version runs on (8 below 1.17, 16 for 1.17, 17 up to 1.20.4, 21 from 1.20.5
+through 1.21.x, 25 from 26.x: Herald, compiled for Java 21, could not load on 1.19.4 at all). A
+listed version with no `spigot-api` snapshot to download fails the check with the download
+error. It takes seconds and needs only Python 3; each `spigot-api` jar is downloaded once
+into `~/.cache/api-compat`, or the directory named by `API_COMPAT_CACHE`.
 
 It exists because of Medieval Factions 6.0.0: built against 1.21.11, it referenced
 `PotionType.LONG_POISON`, which only exists from 1.20.5, and failed to enable on 1.19.4
@@ -121,8 +123,14 @@ Add it to the plugin's build job, after the jar is built, pinned to a tag:
 
 `target build/libs` covers Maven and Gradle: directories that do not exist are skipped, and
 exactly one plugin jar (one with a `plugin.yml`, not `original-*`, `-sources`, `-javadoc` or
-`-plain`) must be found; beside Gradle's thin jar, the single shaded `-all` jar is the one checked. `--exclude a/b/` skips another package; use it only for code that
-guards every version-specific reference itself.
+`-plain`) must be found; beside Gradle's thin jar, the single shaded `-all` jar is the one
+checked. `--exclude a/b/` (or `a.b`) skips another package; use it only for code that guards
+every version-specific reference itself.
+
+The check exits 1, and the build fails, when any version has a problem — every one is listed,
+per version — and also when it could not check anything: no plugin jar or more than one is
+found, or no class in the jar references Bukkit (`nothing was checked`), so a misconfigured
+step cannot pass by checking nothing.
 
 ## Install gate
 
