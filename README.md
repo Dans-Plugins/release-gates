@@ -6,8 +6,8 @@ release. Each workflow boots the candidate on a real Spigot server
 fails when an assertion does not hold: the boot and save-compatibility gates stop at the
 first failure, the install and dependents gates run their per-plugin assertions to completion,
 and the behaviour gate records both `behaviour-diff` and `behaviour-spec` before judging. The
-API-compatibility check boots nothing; it reads the built jar. The run log and a `result.json` artifact are
-the evidence; the policy that decides what to do with that evidence lives elsewhere (see
+API-compatibility check boots nothing; it reads the built jar and reports in the build's own log.
+A workflow's run log and its `result.json` artifact are the evidence; the policy that decides what to do with that evidence lives elsewhere (see
 [Release channels](https://github.com/Dans-Plugins/dpc-conventions/blob/main/docs/RELEASE_CHANNELS.md)).
 
 These workflows publish nothing and hold no secrets. Their token is read-only.
