@@ -1,9 +1,12 @@
 # release-gates
 
 Reusable GitHub Actions workflows that prove a Dans-Plugins plugin build is fit to be a stable
-release. Each gate boots the candidate on a real Spigot server
+release. Each workflow boots the candidate on a real Spigot server
 ([OMCSI](https://github.com/dmccoystephenson/open-mc-server-infrastructure) in Docker) and
-fails on the first assertion that does not hold. The run log and a `result.json` artifact are
+fails when an assertion does not hold: the boot and save-compatibility gates stop at the
+first failure, the install and dependents gates run their per-plugin assertions to completion,
+and the behaviour gate records both `behaviour-diff` and `behaviour-spec` before judging. The
+API-compatibility check boots nothing; it reads the built jar. The run log and a `result.json` artifact are
 the evidence; the policy that decides what to do with that evidence lives elsewhere (see
 [Release channels](https://github.com/Dans-Plugins/dpc-conventions/blob/main/docs/RELEASE_CHANNELS.md)).
 
