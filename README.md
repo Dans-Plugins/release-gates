@@ -582,11 +582,12 @@ or not its field list below names them.
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
 - Save-compatibility gate: `save-compat-<run id>` —
-  `{gate, repository, sha, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, initialCounts, referenceCounts, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
+  `{gate, repository, sha, baseline, candidate, candidateSha256, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, initialCounts, referenceCounts, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
   (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran, and
   `baselineCloseFailure` when the baseline left a trace file on its own shutdowns)
-  — `initialCounts` is `{label: n}` as the baseline's first boot logged it (the supplied
-  fixture's contents, or a fresh server's; bot-scenario deltas are judged over it) and
+  — `baseline` and `candidate` are the two jars' file names and `candidateSha256` the
+  candidate's digest, as in the boot gate; `initialCounts` is `{label: n}` as the
+  baseline's first boot logged it (the supplied fixture's contents, or a fresh server's; bot-scenario deltas are judged over it) and
   `referenceCounts` the same from the baseline's restart after the scenarios (the
   `baseline` column of `counts`, which the candidate's boots are compared against);
   `baselinePlugin` is the baseline's plugin.yml `name` when it differs from the candidate's;
