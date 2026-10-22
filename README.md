@@ -153,9 +153,13 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 Assertions, in order:
 
 1. **dpm** — the server reaches `Done` with Dan's Plugin Manager enabled (fatal).
-2. **get-<slug>** — `dpm get <slug>` reports `Downloaded` (or `already up to date`) rather than
-   `Plugin not found`, a GitHub error, or no release; and the jar DPM wrote to `plugins/<slug>.jar`
-   carries a readable `plugin.yml`, from which the plugin's real name is taken.
+2. **get-<slug>** — DPM prints an outcome for `dpm get <slug>` within 120 seconds, and that
+   output contains `[DPM] Installed <slug>` (or `<slug> … already up to date`). A
+   `Plugin not found:`, `has no published release`, `Failed to download`, `Could not reach GitHub`,
+   `Could not write`, `Something went wrong` or `GitHub rate limit reached` line fails it only
+   when neither of those is present. The jar DPM wrote to `plugins/<slug>.jar` must carry a
+   readable `plugin.yml`, from which the plugin's real name is taken; a dependency DPM fetched
+   alongside it is named in the detail.
 3. **boot** — the server stops after the `dpm get`s and reaches `Done` over the plugins DPM
    installed (fatal).
 4. **enable-<slug>** — the plugin logs `Enabling <name> v<version>`; no
