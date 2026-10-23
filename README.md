@@ -584,7 +584,9 @@ or not its field list below names them.
   `{gate, repository, sha, candidate, plugin, version, candidateSha256, minecraftVersion, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
   plus the plugin's data folder.
 - Install gate: `dpm-install-<run id>` —
-  `{gate, dpm, dpmSource, dpmVersion, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`.
+  `{gate, dpm, dpmSource, dpmVersion, candidateSha256, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`
+  — `candidateSha256` is the digest of the manager jar when it was supplied as a candidate
+  (`dpm_jar_url`, `dpmSource: input`), and `null` for the latest release.
 - Save-compatibility gate: `save-compat-<run id>` —
   `{gate, repository, sha, baseline, candidate, candidateSha256, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, initialCounts, referenceCounts, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
   (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran, and

@@ -26,7 +26,9 @@ Environment:
   PLUGINS              comma-separated DPM slugs (required)
   DPM_JAR              path to the Dan's Plugin Manager jar to deploy (required)
   DPM_SOURCE           "input" when DPM_JAR was supplied by the caller, "latest" when it is
-                       the /releases/latest jar (default: latest); recorded only
+                       the /releases/latest jar (default: latest); recorded only. With
+                       "input", DPM_JAR is a candidate build of the manager and its sha256 is
+                       recorded as candidateSha256, like every other gate's candidate
   JARS_DIR             where installed jars are copied out of the container (default: work/jars)
   RESULT_PATH          where to write result.json (default: result.json)
   OMCSI_API_BASE       default http://localhost:8092
@@ -35,6 +37,7 @@ Environment:
 """
 
 import datetime
+import hashlib
 import json
 import os
 import re
@@ -64,6 +67,10 @@ RESULT = {
     "dpm": os.path.basename(DPM_JAR),
     "dpmSource": DPM_SOURCE,
     "dpmVersion": None,
+    # The digest of the exact manager jar that was verified, for the publisher to check
+    # before uploading it as a release; only a caller-supplied jar is a candidate.
+    "candidateSha256": (hashlib.sha256(open(DPM_JAR, "rb").read()).hexdigest()
+                        if DPM_SOURCE == "input" else None),
     "plugins": [
         {"slug": slug, "name": None, "version": None, "tag": None, "installed": False, "enabled": False}
         for slug in PLUGINS
