@@ -313,9 +313,11 @@ so bots join under any name and are not operators. The script's contract, enforc
   replies, `/f info`-style commands, RCON `execute if block`), never by trusting the client;
 - print evidence to stdout: it is copied into the run log and to `bot-scenario.log`;
 - optionally end stdout with `SCENARIO_EXPECTED {"<label>": <n>, ...}`, keyed by the labels
-  the plugin prints in its `<n> <label> loaded` startup lines. The baseline's restart counts
-  are then asserted against it (**bot-scenario-counts**), so a step the script believed
-  succeeded but the plugin never persisted is caught at the next boot.
+  the plugin prints in its `<n> <label> loaded` startup lines and counting what the script
+  itself creates, not the whole store. What the baseline's restart counts gained over its
+  first boot (the fixture's contents, or zero on a fresh server) is then asserted against it
+  (**bot-scenario-counts**), so a step the script believed succeeded but the plugin never
+  persisted is caught at the next boot.
 
 A server version the installed mineflayer does not know cannot be joined: `minecraft-data`
 3.116.0 knows up to `26.1` (protocol 775) and Spigot `26.2` speaks 776, so a bot scenario
