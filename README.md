@@ -252,7 +252,8 @@ Assertions, in order — the run stops at the first failure:
    the script said to expect (its `SCENARIO_EXPECTED` line) match what the scenario *added*:
    those reference counts minus what the baseline's first boot loaded (zero on a fresh
    server, the fixture's contents when `fixture_url` was given), label by label; a label the
-   baseline does not log is reported. Passes with "none" when no script was given.
+   baseline does not log is reported. Passes with "none" when no script was given, and with
+   "nothing to compare" when the script printed no `SCENARIO_EXPECTED` line.
 8. **fixture** — the server is stopped; `plugins/<Name>/` and every path matched by
    `extra_data_paths` are copied out, listed (size and sha256) and archived. At least one file
    must have been captured. With a supplied fixture this is that fixture as the baseline left it.

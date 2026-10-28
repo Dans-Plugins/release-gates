@@ -38,7 +38,8 @@ It asserts, in order:
                      the baseline's restart counts minus what its first boot loaded (zero on
                      a fresh server; the fixture's contents when one was supplied) — so a
                      script that creates two factions over a fixture holding fourteen expects
-                     2, not 16 ("none" when no script)
+                     2, not 16 ("none" when no script; "nothing to compare" when the
+                     script printed no SCENARIO_EXPECTED line)
   fixture            the server is stopped; plugins/<Name> and every extra data path are
                      copied out, listed (size, sha256) and archived; at least one file
   candidate-boot-1   the baseline jar is removed and the candidate deployed; the candidate
