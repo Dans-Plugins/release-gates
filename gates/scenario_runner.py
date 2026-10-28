@@ -17,15 +17,19 @@ and RCON. The script's contract:
   * its stdout is the evidence and is captured into the run log and
     evidence/bot-scenario.log;
   * its last stdout line may be `SCENARIO_EXPECTED {json}`: a count per persisted entity
-    type keyed by the label the plugin prints in its `<n> <label> loaded` startup lines.
-    When present, the baseline's restart counts must match it (bot-scenario-counts).
+    type keyed by the label the plugin prints in its `<n> <label> loaded` startup lines,
+    counting what the script itself creates, not the whole store. When present, what the
+    baseline's restart counts gained over its first boot (zero on a fresh server; the
+    supplied fixture's contents otherwise) must match it (bot-scenario-counts).
 
 Two assertions are recorded (both "none" when no script is given):
 
   bot-scenario         the script exits 0 within the timeout, and no error is attributable
                        to the plugin in the console while it runs
   bot-scenario-counts  every label the script expects that the baseline logs on restart
-                       carries the expected count
+                       gained the expected count over the baseline's first boot (a label
+                       the baseline does not log is reported); passes with "nothing to
+                       compare" when the script printed no SCENARIO_EXPECTED line
 
 Environment:
   SCENARIO_SCRIPT_URL   raw URL of the script (empty: the assertions are "none")
