@@ -340,7 +340,8 @@ def dependent_enabled(n, log, dependent):
     if problems:
         record(f"enable-{dependent['name']}-{n}", False, "; ".join(problems))
         return
-    dependent[f"enabled_{n}"] = True
+    if n != "control":  # the control boot's outcome is enabled_baseline, set by control_phase
+        dependent[f"enabled_{n}"] = True
     record(f"enable-{dependent['name']}-{n}", True, f"enabled v{version}")
 
 
