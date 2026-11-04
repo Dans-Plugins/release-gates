@@ -485,7 +485,8 @@ Assertions, in order:
 
 The per-dependent assertions run to completion: one dependent that breaks does not hide
 whether the others still boot. The gate passes only when every assertion holds — every
-installed dependent enabled on both boots. When every dependent is skipped, the candidate is
+installed dependent enabled on both boots, except one the control phase marked pre-existing,
+which passes either way. When every dependent is skipped, the candidate is
 still booted and the gate can pass with no dependent tested; the **install-<Name>** details
 are what says so.
 

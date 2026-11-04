@@ -46,8 +46,9 @@ stable jar are deployed together on one server, which is then booted twice. It a
 The per-dependent assertions do not stop the run: one dependent that breaks must not hide
 whether the others still boot. Harness-level assertions (`boot-*`, `candidate-enabled-*`,
 a server that will not stop) are fatal. The gate passes only when every assertion holds,
-i.e. every installed dependent enabled on both boots; with every dependent skipped, the
-candidate is still booted and the gate can pass with no dependent tested.
+i.e. every installed dependent enabled on both boots, except a pre-existing one, which
+passes either way; with every dependent skipped, the candidate is still booted and the
+gate can pass with no dependent tested.
 
 Environment:
   CANDIDATE_JAR        path to the candidate jar (required)
