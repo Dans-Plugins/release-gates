@@ -14,6 +14,7 @@ Per row and jar the check is `ok`, `mismatch` or `unchecked` (row not observed).
 row is `ok`; `mismatch` (candidate only — the one finding that can fail the gate); `pre-existing`
 (both jars; never blocks, owner decision 2026-10-05); `fixed` (stable mismatched, candidate
 matches); `source-missing` (the cited file or lines do not exist; not enforced); or `unchecked`.
+The gate turns a `mismatch` that does not recur on its replay into `flaky`, which never blocks.
 """
 
 import re

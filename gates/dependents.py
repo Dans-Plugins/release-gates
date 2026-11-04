@@ -7,11 +7,12 @@ Dan's Plugin Manager's integration test uses) and reads the server's console fro
 `docker logs`. The candidate, any extra dependency jars and every dependent's current
 stable jar are deployed together on one server, which is then booted twice. It asserts:
 
-  install-<Name>        the dependent's stable jar carries a readable plugin.yml and every
-                        plugin it hard-depends on is on the server (the candidate, a
-                        `dependencies` jar or another dependent). A dependent with no
-                        stable release, or one whose other dependency was not supplied,
-                        is reported as skipped and is not deployed
+  install-<Name>        whether the dependent is deployed: its stable jar carries a readable
+                        plugin.yml and every plugin it hard-depends on is on the server (the
+                        candidate, a `dependencies` jar or another dependent). Never fails: a
+                        dependent with no stable release, no jar asset, no readable
+                        plugin.yml or an unsupplied dependency passes as skipped and is not
+                        deployed
   boot-control          only with BASELINE_JAR (the control phase): the current stable and
                         every installed dependent, booted together first, reach "Done" (fatal)
   enable-<Name>-baseline
@@ -45,7 +46,9 @@ stable jar are deployed together on one server, which is then booted twice. It a
 The per-dependent assertions do not stop the run: one dependent that breaks must not hide
 whether the others still boot. Harness-level assertions (`boot-*`, `candidate-enabled-*`,
 a server that will not stop) are fatal. The gate passes only when every assertion holds,
-i.e. every dependent with a stable release enabled on both boots.
+i.e. every installed dependent enabled on both boots, except a pre-existing one, which
+passes either way; with every dependent skipped, the candidate is still booted and the
+gate can pass with no dependent tested.
 
 Environment:
   CANDIDATE_JAR        path to the candidate jar (required)
