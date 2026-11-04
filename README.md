@@ -431,7 +431,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `repository` | yes | `owner/repo` of the plugin — recorded in the result |
 | `sha` | yes | commit the candidate was built from — recorded in the result |
 | `jar_url` | yes | where to download the candidate |
-| `dependents` | yes | comma-separated `owner/repo` list of plugins that depend on the candidate; each one's `/releases/latest` jar is the dependent under test. A repository with no stable release is reported as `skipped: no stable release` and does not fail the gate — there is nothing an operator could be running. A repository that does not exist fails the run |
+| `dependents` | yes | comma-separated `owner/repo` list of plugins that depend on the candidate; each one's `/releases/latest` jar is the dependent under test. A repository with no stable release is reported as `skipped: no stable release`, and one whose stable release has no jar asset as `skipped: stable release <tag> has no jar asset`; neither fails the gate — there is nothing an operator could be running. A repository that does not exist fails the run |
 | `baseline_jar_url` | no | the current stable jar; when given, every dependent is first booted against it (a **control** phase). A dependent that already fails there is reported as pre-existing and does not fail the gate; only a dependent that enables against the stable and not against the candidate — a regression — does. Trace files the stable leaves are attributed to it, not the candidate. |
 | `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list of *other* plugins the dependents need besides the candidate; each one's `/releases/latest` jar is installed alongside. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`). Usually empty |
 | `expected_version` | no | the version the candidate must report when enabling |
@@ -439,11 +439,14 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 
 Assertions, in order:
 
-1. **install-<Name>** — the dependent's stable jar carries a readable `plugin.yml`, and
-   every plugin it hard-depends on is on the server: the candidate, a `dependencies` jar or
-   another dependent. A dependent whose other dependency was not supplied is reported as
-   `skipped: dependency [...] not supplied` and not deployed — the candidate did not break
-   it, the caller did not supply it.
+1. **install-<Name>** — reports whether the dependent is deployed: its stable jar carries a
+   readable `plugin.yml`, and every plugin it hard-depends on is on the server (the candidate,
+   a `dependencies` jar or another dependent). This assertion never fails. A dependent that
+   cannot be deployed passes it as `skipped: …` and is left off the server: no stable release
+   or no jar asset (see `dependents` above), a jar with no readable `plugin.yml`
+   (`skipped: <jar> has no readable plugin.yml: …`), or an unmet hard dependency
+   (`skipped: dependency [...] not supplied` — the candidate did not break it, the caller did
+   not supply it).
 2. **boot-control**, **enable-<Name>-baseline**, **control** — only with `baseline_jar_url`:
    the stable jar and every installed dependent are booted together first, and
    **boot-control** is that boot reaching `Done` (fatal). Each **enable-<Name>-baseline** is
@@ -482,11 +485,13 @@ Assertions, in order:
 
 The per-dependent assertions run to completion: one dependent that breaks does not hide
 whether the others still boot. The gate passes only when every assertion holds — every
-dependent with a stable release enabled on both boots.
+installed dependent enabled on both boots. When every dependent is skipped, the candidate is
+still booted and the gate can pass with no dependent tested; the **install-<Name>** details
+are what says so.
 
 What it does not prove: that a dependent *works* against the candidate beyond enabling
-(a method it calls only from a command can still be gone), or anything about dependents
-that have no stable release.
+(a method it calls only from a command can still be gone), or anything about a dependent
+that was skipped.
 
 Dispatch by hand:
 
@@ -564,8 +569,9 @@ that promises the behaviour, pinned to a commit. Every reviewed expectation is c
 not; replayed once on the candidate, then fails `behaviour-spec`); `pre-existing` (both jars
 contradict the docs; reported, never fails); `fixed`; `flaky` (a candidate-only mismatch that did
 not recur on the replay; never fails); `source-missing` (the cited file or lines do not exist; not
-enforced); `unchecked`. Rows without a reviewed expectation get a proposal in
-`evidence/expectations-proposed.json`. The page marks a contradicted cell `≠`, and `result.json`
+enforced); `unchecked`. A row with no `expect` at all that the candidate observed gets an
+unreviewed proposal in `evidence/expectations-proposed.json`; a row that already has an unreviewed
+`expect` gets none, and is not enforced until it is reviewed. The page marks a contradicted cell `≠`, and `result.json`
 carries the page (`page`) and the per-row spec results (`spec`).
 
 The candidate's `lang_en_US.properties` maps refusal messages to lang keys for both passes, so a
