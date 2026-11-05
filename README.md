@@ -681,4 +681,6 @@ Gate servers stay counted, but as CI: every usage event a gate server sends carr
 - Dependencies come from `/releases/latest`, the endpoint DPM's stable channel reads, and the
   Maven shade plugin's `original-*.jar` is skipped when a release carries both.
 - The harness reads the console with `docker logs --since`, scoped per boot, so an error from
-  the baseline boot cannot be blamed on the candidate.
+  the baseline boot cannot be blamed on the candidate. Each window starts one second before its
+  action, so the boot and install gates wait a second before each `help <command>` and
+  `dpm get <slug>`: one command's reply must not be read as the next one's.

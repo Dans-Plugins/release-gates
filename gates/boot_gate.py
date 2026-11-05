@@ -241,6 +241,9 @@ def help_commands(n, commands):
         return
     problems = []
     for cmd in commands:
+        # now_cursor() reaches one second back: without this wait the previous command's
+        # answer is inside this window, and counts as this command's before its own arrives.
+        time.sleep(1)
         cursor = now_cursor()
         send_command(f"help {cmd}")
         answered = wait_for(lambda: HELP_ANSWERED.search(logs_since(cursor)) is not None, 20, f"help {cmd}", poll=2)

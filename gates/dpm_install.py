@@ -240,6 +240,9 @@ def attributable_errors(log, plugin_name, package_prefix):
 
 def get(slug):
     p = entry(slug)
+    # now_cursor() reaches one second back: without this wait the previous slug's outcome is
+    # inside this window, and ends the wait for this slug before its own outcome arrives.
+    time.sleep(1)
     cursor = now_cursor()
     send_command(f"dpm get {slug}")
     done = wait_for(
