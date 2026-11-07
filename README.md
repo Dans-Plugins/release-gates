@@ -208,7 +208,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `extra_data_paths` | no | newline-separated server-root-relative glob patterns to capture beyond `plugins/<Name>/`, e.g. `medieval_factions_db*` for a plugin whose H2 file sits in the server root |
 | `fixture_url` | no | URL of a fixture `tar.gz` — a [plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures) release asset — to boot the baseline over instead of recording one; see [Supplied fixtures](#supplied-fixtures) |
 | `fixture_manifest_url` | no | URL of that fixture's `manifest.json`; defaults to `manifest.json` beside the archive, which every plugin-fixtures release carries |
-| `restart_cycles` | no | how many full stop/start cycles the candidate performs after its first boot over the fixture (default `1`); every boot carries the counts, files-kept and stop checks. The release automation passes `5` for a database-backed plugin: a store that fails to close shows it on a later boot, not the first |
+| `restart_cycles` | no | how many full stop/start cycles the candidate performs after its first boot over the fixture (default `1`; a value below 1 counts as 1); every boot carries the counts, files-kept and stop checks. The release automation passes `5` for a database-backed plugin: a store that fails to close shows it on a later boot, not the first |
 | `backend` | no | the store the plugin is run on: `h2` (default — the plugin's embedded default, today's behaviour), `mariadb`, `postgres` (a database container beside the server, shared by baseline and candidate) or `json` (the plugin's JSON files, plus a migration round trip). See [Backend matrix](#backend-matrix) |
 | `scenario_script` | no | raw URL of a Node/mineflayer script (normally `scenarios/<slug>.js` in [plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) run against the baseline after the console scenario — see [Bot scenarios](#bot-scenarios) |
 
@@ -224,7 +224,9 @@ Assertions, in order — the run stops at the first failure:
 2. **baseline-boot** — dependency jars and the baseline jar are deployed; after a restart the
    baseline logs `Enabling <name> v<version>` with no enable failure and no error attributable
    to it. With a supplied fixture this boot is already over that data. When Bukkit prints an
-   exception after `Error occurred while enabling`, that line is quoted in the detail.
+   exception after `Error occurred while enabling`, that line is quoted in the detail. A server
+   that never starts or never reaches `Done` on its own first start — before anything is
+   deployed, so ahead of step 1 — is also recorded as a failed **baseline-boot**.
 3. **fixture-expected** — only with `fixture_url`, and judged on the baseline's *first* boot
    over the fixture (step 2, before any scenario adds to it): every label in the manifest's
    `expected` is logged by the baseline with that count. A stable release that does not load what the
@@ -261,7 +263,8 @@ Assertions, in order — the run stops at the first failure:
 9. **candidate-boot-1** — the baseline jar is removed and the candidate deployed; the candidate
    logs `Enabling <name> v<version>` (equal to `expected_version` when given); no enable
    failure, no `Could not load` / `UnknownDependencyException`, no `ERROR`/`SEVERE` line naming
-   the plugin and no stack frame inside its package.
+   the plugin and no stack frame inside its package. A baseline jar that cannot be removed
+   fails here too.
 10. **counts-1** — every label the baseline logged is logged by the candidate with the same
    count. A label that appears on only one side is reported, not failed (plugins change their
    log lines). Passes with "baseline logged no counts" when there were none. With a supplied
@@ -281,9 +284,11 @@ Assertions, in order — the run stops at the first failure:
     server is restarted on that store and every count must equal the baseline's (and the
     manifest's `expected`, with a supplied fixture); the original store is then emptied (its
     files are kept as evidence), the command is run back, and the restart on the original
-    store must reproduce the counts again. Every stop on the way carries the full stop
-    check. Passes as "not applicable" when the candidate does not answer the migration
-    command with its usage.
+    store must reproduce the counts again. After **baseline-migration** the database still
+    holds the baseline's pre-migration copy, and a migration refuses a non-empty target, so
+    the database is emptied the same way before the first leg. Every stop on the way carries
+    the full stop check. Passes as "not applicable" when the candidate does not answer the
+    migration command with its usage.
 
 What it does not prove: anything about data the scenario did not create (an empty scenario
 proves only that the baseline's freshly written defaults load), that a downgrade back to the
@@ -454,7 +459,9 @@ Assertions, in order:
    as passed with `PRE-EXISTING against the current stable` and marks the dependent
    pre-existing. **control** then summarises which dependents enable against the stable; it
    fails the run only when the server will not stop or the stable jar cannot be removed.
-   Trace files present after the control phase are recorded as `baselineCloseFailure`.
+   Trace files present after the control phase are recorded as `baselineCloseFailure`. Only
+   the stable jar is removed: the data folders the control boot wrote stay on the server, so
+   with a control phase **boot-1** runs over them.
 3. **boot-1** — the server reaches `Done` (fatal). A server that never starts or never
    reaches `Done` on its own first start — before anything is deployed, so ahead of step 2 —
    or does not stop before the candidate boots is also recorded as a failed **boot-1**.
@@ -484,7 +491,9 @@ Assertions, in order:
    the data folders the first boot wrote.
 
 The per-dependent assertions run to completion: one dependent that breaks does not hide
-whether the others still boot. The gate passes only when every assertion holds — every
+whether the others still boot. A failed **stop-<n>** is fatal only when the server is still
+running after two minutes; an attributable error or a close failure is recorded and the
+second boot still runs. The gate passes only when every assertion holds — every
 installed dependent enabled on both boots, except one the control phase marked pre-existing,
 which passes either way. When every dependent is skipped, the candidate is
 still booted and the gate can pass with no dependent tested; the **install-<Name>** details
@@ -588,7 +597,10 @@ behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 `USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
 (see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
 Every gate's `result.json` also carries `startedAt` and `finishedAt` (UTC, ISO 8601), whether
-or not its field list below names them.
+or not its field list below names them. A field written partway through a run is absent from
+the result of a run that stopped before that point: `initialCounts` and `referenceCounts` in
+the save-compatibility gate, `preExisting` (written only when the run reaches its end) in the
+dependents gate.
 
 - Boot gate: `boot-gate-<run id>` —
   `{gate, repository, sha, candidate, plugin, version, candidateSha256, minecraftVersion, passed, assertions: [{name, passed, detail}]}` — `candidateSha256` is the digest of the exact jar that was verified, for the publisher to check before uploading
@@ -596,7 +608,8 @@ or not its field list below names them.
 - Install gate: `dpm-install-<run id>` —
   `{gate, dpm, dpmSource, dpmVersion, candidateSha256, plugins: [{slug, name, version, tag, installed, enabled}], passed, assertions}`
   — `candidateSha256` is the digest of the manager jar when it was supplied as a candidate
-  (`dpm_jar_url`, `dpmSource: input`), and `null` for the latest release.
+  (`dpm_jar_url`, `dpmSource: input`), and `null` for the latest release. An entry of `plugins`
+  also carries `main`, the installed jar's main class, once its **get-<slug>** has passed.
 - Save-compatibility gate: `save-compat-<run id>` —
   `{gate, repository, sha, baseline, candidate, candidateSha256, plugin, baselineVersion, version, backend, restartCycles, passed, counts: {label: [baseline, candidate boot 1, …, candidate boot restartCycles + 1]}, initialCounts, referenceCounts, fixture (null, or the supplied fixture's url, manifestUrl, sha256, kind, plugin, version, minecraft, paths, expected, dbDump), fixtureFiles, assertions}`
   (plus `scenarioScript` and `scenarioExpected` when a bot scenario ran, and
@@ -617,12 +630,15 @@ or not its field list below names them.
   `bot-scenario.json` (the script's own evidence, with a bot scenario), `trace-files/` (every
   trace file a stop check blamed on the candidate) and, for a `json` run,
   `migrationRoundtrip: {start, legs: [{from, to, migration, storageLine, counts, countsDetail, cleared}]}`
-  in the result and `roundtrip-cleared-<store>.tar.gz` (the store emptied before the second leg).
+  in the result (`cleared` only on a leg that emptied its target first) and
+  `roundtrip-cleared-<store>.tar.gz` (the store emptied before the second leg, and the database
+  emptied before the first after **baseline-migration**).
 - Dependents gate: `dependents-<run id>` —
   `{gate, repository, sha, candidate, plugin, version, candidateSha256, dependents: [{repository, name, version, tag, jar, installed, enabled_baseline, enabled_1, enabled_2, pre_existing, skipped}], preExisting, passed, assertions}`
   (plus `baselineCloseFailure` when the control phase left a trace file, and
   `closeFailureWithBrokenDependents` when a close failure was excused by a pre-existing
-  dependent) and `trace-files/` (every trace file a stop check blamed).
+  dependent — the trace files of every excused stop, an empty list when only the console
+  showed the failure) and `trace-files/` (every trace file a stop check blamed).
 - Behaviour gate: `behaviour-<run id>`, uploaded by the `compare` job —
   `{gate, repository, sha, baseline, candidate, candidateSha256, rowsUrl, setupUrl, driverUrl, plugin, baselineVersion, version, passed, rows: [{group, id, result, stable, candidate}], spec: [{id, group, expect, stable, candidate, status}], page, assertions, startedAt, finishedAt}`
   — `rows` holds every compared row (`same`, `changed`, `message-changed`, `flaky`,
