@@ -37,7 +37,9 @@ stable jar are deployed together on one server, which is then booted twice. It a
   stop-1                the server stops within the timeout with no error attributable to
                         the candidate or any dependent, and the database closed cleanly:
                         no *.trace.db that is new or has grown since the control phase (any
-                        at all without one) and no close-failure line was printed. With a
+                        at all without one) and no close-failure line was printed. Both
+                        checks always run; blamed trace files are kept under trace-files/
+                        whichever one failed. With a
                         pre-existing dependent installed a close failure is reported
                         (closeFailureWithBrokenDependents) but passes
   boot-2, candidate-enabled-2, enable-<Name>-2, stop-2
@@ -387,9 +389,9 @@ def stop(n, plugin_name, package_prefix):
     for d in RESULT["dependents"]:
         if d["installed"]:
             errors += attributable_errors(log, d["name"], DEPENDENT_META[d["repository"]]["package"])
-    if errors:
-        record(f"stop-{n}", False, "; ".join(errors[:5]))
-        return
+    # The close check runs, and its trace files are kept, whichever check fails first — as
+    # save_compat.py's stop_problems() does — so a stop that also logged an attributable
+    # error does not lose the evidence of why the database did not close.
     close_lines, trace_files = db_close_evidence(log)
     if trace_files:
         # Keep the evidence: the trace file names the H2 instance (shaded package) that failed.
@@ -397,9 +399,17 @@ def stop(n, plugin_name, package_prefix):
         os.makedirs(ev, exist_ok=True)
         for t in trace_files:
             copy_out(f"{SERVER_ROOT}/{t}", os.path.join(ev, t.replace("/", "__")))
-    if close_lines or trace_files:
+    close_detail = ("database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files])
+                    if close_lines or trace_files else "")
+    if errors:
+        # An attributable error fails the stop on its own; a close failure beside it is
+        # reported, not excused (the pre-existing-dependent excuse below covers a close
+        # failure alone).
+        record(f"stop-{n}", False, "; ".join(errors[:5] + ([close_detail] if close_detail else [])))
+        return
+    if close_detail:
         broken = [d["name"] for d in RESULT["dependents"] if d.get("pre_existing")]
-        detail = "database did not close cleanly: " + "; ".join(close_lines[:3] + [f"trace file {t}" for t in trace_files])
+        detail = close_detail
         if broken:
             # A dependent that already fails to enable can leave a connection open on a shared
             # database; the exit-hook failure that follows is not the candidate's. The
