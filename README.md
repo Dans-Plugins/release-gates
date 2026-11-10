@@ -482,8 +482,9 @@ Assertions, in order:
    the server root that is new or has grown since the control phase (any trace file at all
    when there was no control phase) and the console has no `zip file closed` / `MVStoreException` /
    `OnExitDatabaseCloser` / `File corrupted while reading record` line, the same check as
-   the save-compatibility gate. The offending trace files are kept under `trace-files/` in
-   the evidence. When a pre-existing dependent is installed, a close failure is reported
+   the save-compatibility gate. Both checks run on every stop, and the offending trace files
+   are kept under `trace-files/` in the evidence even when an attributable error failed the
+   stop first; the detail then carries the error and the close failure. When a pre-existing dependent is installed, a close failure is reported
    (`closeFailureWithBrokenDependents`) but passes — a dependent that never enabled can
    leave a shared database open; the candidate's own close is the save-compatibility gate's
    to prove.
