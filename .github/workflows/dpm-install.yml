@@ -4,7 +4,7 @@ name: Install gate
 # and that the installed plugin enables — the acceptance test for a stable release, run
 # through the same path an operator uses. See gates/dpm_install.py for the assertions.
 #
-# Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
+# Callable two ways with the same inputs, plus the call-only `gates_ref`: `workflow_dispatch` (the fleet's release
 # automation, or a person, dispatches it with a list of DPM slugs) and `workflow_call`.
 # Both record `result.json` and the server log as run artifacts.
 #
@@ -42,6 +42,11 @@ on:
         required: false
         type: string
         default: ""
+      gates_ref:
+        description: "The release-gates tag this workflow was called at (the same as the `uses: ...@<tag>`), so the gate scripts match it"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -57,8 +62,13 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # Under workflow_call a bare checkout fetches the CALLER's repository; the gates must come
+      # from release-gates at the tag the caller named (gates_ref), or at this run's commit.
       - name: Checkout gates
         uses: actions/checkout@v4
+        with:
+          repository: Dans-Plugins/release-gates
+          ref: ${{ github.repository == 'Dans-Plugins/release-gates' && github.sha || inputs.gates_ref }}
 
       - name: Checkout OMCSI
         uses: actions/checkout@v4

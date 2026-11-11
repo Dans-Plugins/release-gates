@@ -25,7 +25,7 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 
 ## Boot gate
 
-Inputs, identical for `workflow_dispatch` and `workflow_call`:
+Inputs, identical for `workflow_dispatch` and `workflow_call`, except the one marked call-only:
 
 | Input | Required | Meaning |
 |---|---|---|
@@ -35,6 +35,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list; each one's `/releases/latest` jar is installed beside the candidate, exactly what an operator would get. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`); without it the first non-`original-` jar is taken |
 | `expected_version` | no | the version the candidate must report when enabling |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`). 1.17 and later can be built: OMCSI runs BuildTools on the JDK each version requires |
+| `gates_ref` | no (call-only) | the release-gates tag the caller's `uses: …@<tag>` names, so the gate scripts are checked out from release-gates at that tag (a bare checkout under `workflow_call` would fetch the caller's repository) |
 
 Assertions, in order — the run stops at the first failure:
 
@@ -71,13 +72,14 @@ gh workflow run boot-gate.yml --repo Dans-Plugins/release-gates \
   -f expected_version=0.4.0
 ```
 
-Reuse from a plugin repository — reference a tag, never a branch, so a change here cannot alter a check in flight:
+Reuse from a plugin repository — reference a tag, never a branch, so a change here cannot alter a check in flight, and pass the same tag as `gates_ref` (the first tag after v24 accepts it; with an older tag a called gate checks out the plugin's own repository and cannot find `gates/`):
 
 ```yaml
 jobs:
   boot:
-    uses: Dans-Plugins/release-gates/.github/workflows/boot-gate.yml@v1
+    uses: Dans-Plugins/release-gates/.github/workflows/boot-gate.yml@vN
     with:
+      gates_ref: vN  # the same tag as in `uses:`, so the gate scripts match the workflow
       repository: ${{ github.repository }}
       sha: ${{ github.sha }}
       jar_url: https://github.com/${{ github.repository }}/releases/download/dev/MyPlugin.jar
@@ -142,13 +144,14 @@ on a fresh server, `dpm get <slug>` is sent over the console for each slug, and 
 restarted so the downloaded jars enable. Nothing is downloaded by the harness itself — DPM
 resolves each slug to its repository's `/releases/latest` exactly as it does on a live server.
 
-Inputs, identical for `workflow_dispatch` and `workflow_call`:
+Inputs, identical for `workflow_dispatch` and `workflow_call`, except the one marked call-only:
 
 | Input | Required | Meaning |
 |---|---|---|
 | `plugins` | yes | comma-separated DPM slugs, as listed by `/dpm list` (e.g. `easylinks,herald`) |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`) |
 | `dpm_jar_url` | no | a Dan's Plugin Manager jar to deploy instead of its `/releases/latest` one — how a candidate build of the installer itself is verified; `result.json` records `dpmSource: "input"` or `"latest"` |
+| `gates_ref` | no (call-only) | the release-gates tag the caller's `uses: …@<tag>` names, so the gate scripts are checked out from release-gates at that tag (a bare checkout under `workflow_call` would fetch the caller's repository) |
 
 Assertions, in order:
 
@@ -192,7 +195,7 @@ prove it can read back what it wrote itself, and keeps doing so. The whole exerc
 one of four stores (`backend`): the plugin's embedded H2, an external MariaDB or PostgreSQL
 in a sibling container, or the plugin's JSON files — see [Backend matrix](#backend-matrix).
 
-Inputs, identical for `workflow_dispatch` and `workflow_call`:
+Inputs, identical for `workflow_dispatch` and `workflow_call`, except the one marked call-only:
 
 | Input | Required | Meaning |
 |---|---|---|
@@ -211,6 +214,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `restart_cycles` | no | how many full stop/start cycles the candidate performs after its first boot over the fixture (default `1`; a value below 1 counts as 1); every boot carries the counts, files-kept and stop checks. The release automation passes `5` for a database-backed plugin: a store that fails to close shows it on a later boot, not the first |
 | `backend` | no | the store the plugin is run on: `h2` (default — the plugin's embedded default, today's behaviour), `mariadb`, `postgres` (a database container beside the server, shared by baseline and candidate) or `json` (the plugin's JSON files, plus a migration round trip). See [Backend matrix](#backend-matrix) |
 | `scenario_script` | no | raw URL of a Node/mineflayer script (normally `scenarios/<slug>.js` in [plugin-fixtures](https://github.com/Dans-Plugins/plugin-fixtures)) run against the baseline after the console scenario — see [Bot scenarios](#bot-scenarios) |
+| `gates_ref` | no (call-only) | the release-gates tag the caller's `uses: …@<tag>` names, so the gate scripts are checked out from release-gates at that tag (a bare checkout under `workflow_call` would fetch the caller's repository) |
 
 Assertions, in order — the run stops at the first failure:
 
@@ -429,7 +433,7 @@ Factions, whose API Currencies, Fiefs, Democracy and the BlueMap integration com
 against — and it answers the question the boot gate cannot: does the candidate still carry
 what its dependents link to.
 
-Inputs, identical for `workflow_dispatch` and `workflow_call`:
+Inputs, identical for `workflow_dispatch` and `workflow_call`, except the one marked call-only:
 
 | Input | Required | Meaning |
 |---|---|---|
@@ -441,6 +445,7 @@ Inputs, identical for `workflow_dispatch` and `workflow_call`:
 | `dependencies` | no | comma-separated `owner/repo[#asset-substring]` list of *other* plugins the dependents need besides the candidate; each one's `/releases/latest` jar is installed alongside. `#substring` narrows a release that ships one jar per platform (`BlueMap-Minecraft/BlueMap#spigot`). Usually empty |
 | `expected_version` | no | the version the candidate must report when enabling |
 | `minecraft_version` | no | Spigot version to boot (default `26.2`) |
+| `gates_ref` | no (call-only) | the release-gates tag the caller's `uses: …@<tag>` names, so the gate scripts are checked out from release-gates at that tag (a bare checkout under `workflow_call` would fetch the caller's repository) |
 
 Assertions, in order:
 
