@@ -12,10 +12,11 @@ name: Save-compatibility gate
 # stable and fixing the reference counts, which must also equal the manifest's `expected`
 # — and the candidate follows exactly as otherwise.
 #
-# Callable two ways with the same inputs, plus the call-only `gates_ref`: `workflow_dispatch` (the fleet's release
-# automation, or a person, dispatches it with the two jar URLs) and `workflow_call` (a
-# plugin repository's own workflow can reuse it). Both record `result.json`, the server
-# log, the fixture and the candidate's data as run artifacts.
+# Callable two ways with the same inputs, plus the call-only `gates_ref`:
+# `workflow_dispatch` (the fleet's release automation, or a person, dispatches it with the
+# two jar URLs) and `workflow_call` (a plugin repository's own workflow can reuse it). Both
+# record `result.json`, the server log, the fixture and the candidate's data as run
+# artifacts.
 #
 # Console commands only reach what a plugin lets a non-player sender do. `scenario_script`
 # names a Node/mineflayer script that joins bots to the server (offline mode is on, so any

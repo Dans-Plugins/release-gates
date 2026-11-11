@@ -3,9 +3,10 @@ name: Boot gate
 # T1: boots a candidate plugin jar on a real Spigot server (OMCSI in Docker), twice, and
 # fails on the first assertion that does not hold. See gates/boot_gate.py for the list.
 #
-# Callable two ways with the same inputs, plus the call-only `gates_ref`: `workflow_dispatch` (the release automation, or a
-# person, dispatches it with a jar URL) and `workflow_call` (a plugin repository's own
-# workflow can reuse it). Both record `result.json` and the server log as run artifacts.
+# Callable two ways with the same inputs, plus the call-only `gates_ref`:
+# `workflow_dispatch` (the release automation, or a person, dispatches it with a jar URL)
+# and `workflow_call` (a plugin repository's own workflow can reuse it). Both record
+# `result.json` and the server log as run artifacts.
 #
 # The OMCSI checkout + Docker image cache is lifted from Dans-Plugin-Manager's
 # .github/workflows/integration.yml: on a cache hit the 10–15 minute Spigot build is skipped.

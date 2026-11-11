@@ -4,9 +4,10 @@ name: Install gate
 # and that the installed plugin enables — the acceptance test for a stable release, run
 # through the same path an operator uses. See gates/dpm_install.py for the assertions.
 #
-# Callable two ways with the same inputs, plus the call-only `gates_ref`: `workflow_dispatch` (the fleet's release
-# automation, or a person, dispatches it with a list of DPM slugs) and `workflow_call`.
-# Both record `result.json` and the server log as run artifacts.
+# Callable two ways with the same inputs, plus the call-only `gates_ref`:
+# `workflow_dispatch` (the fleet's release automation, or a person, dispatches it with a
+# list of DPM slugs) and `workflow_call`. Both record `result.json` and the server log as
+# run artifacts.
 #
 # The OMCSI checkout + Docker image cache is the pattern from boot-gate.yml (lifted from
 # Dans-Plugin-Manager's .github/workflows/integration.yml): on a cache hit the 10–15 minute
