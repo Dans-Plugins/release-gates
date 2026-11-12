@@ -5,10 +5,11 @@ name: Dependents gate
 # and every dependent's current stable jar are deployed together on one server, which is
 # booted twice with a clean stop in between. See gates/dependents.py for the assertions.
 #
-# Callable two ways with the same inputs: `workflow_dispatch` (the fleet's release
-# automation, or a person, dispatches it with the candidate's jar URL and the list of
-# dependent repositories) and `workflow_call` (a plugin repository's own workflow can reuse
-# it). Both record `result.json` and the server log as run artifacts.
+# Callable two ways with the same inputs, plus the call-only `gates_ref`:
+# `workflow_dispatch` (the fleet's release automation, or a person, dispatches it with the
+# candidate's jar URL and the list of dependent repositories) and `workflow_call` (a plugin
+# repository's own workflow can reuse it). Both record `result.json` and the server log as
+# run artifacts.
 #
 # The OMCSI checkout + Docker image cache is the pattern from boot-gate.yml (lifted from
 # Dans-Plugin-Manager's .github/workflows/integration.yml): on a cache hit the 10–15 minute
@@ -83,6 +84,11 @@ on:
         required: false
         type: string
         default: "26.2"
+      gates_ref:
+        description: "The release-gates tag this workflow was called at (the same as the `uses: ...@<tag>`), so the gate scripts match it"
+        required: false
+        type: string
+        default: ""
 
 permissions:
   contents: read
@@ -98,8 +104,13 @@ jobs:
     timeout-minutes: 60
 
     steps:
+      # Under workflow_call a bare checkout fetches the CALLER's repository; the gates must come
+      # from release-gates at the tag the caller named (gates_ref), or at this run's commit.
       - name: Checkout gates
         uses: actions/checkout@v4
+        with:
+          repository: Dans-Plugins/release-gates
+          ref: ${{ github.repository == 'Dans-Plugins/release-gates' && github.sha || inputs.gates_ref }}
 
       - name: Checkout OMCSI
         uses: actions/checkout@v4
