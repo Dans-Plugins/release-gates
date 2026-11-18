@@ -601,7 +601,12 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 (the full console; the behaviour gate's logs are named per job, see below). Each but the
 behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 `USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
-(see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
+(see [Usage reporting](#usage-reporting)). The job summary shows the assertion table. The
+save-compatibility gate's summary also names `baselineCloseFailure` when present. The
+dependents gate's summary has an `enabled (control)` column (`—` without a control phase),
+shows `pre-existing` in place of ❌ for a dependent that already failed against the current
+stable, and names `preExisting`, `baselineCloseFailure` and `closeFailureWithBrokenDependents`
+when present.
 Every gate's `result.json` also carries `startedAt` and `finishedAt` (UTC, ISO 8601), whether
 or not its field list below names them. A field written partway through a run is absent from
 the result of a run that stopped before that point: `initialCounts` and `referenceCounts` in
