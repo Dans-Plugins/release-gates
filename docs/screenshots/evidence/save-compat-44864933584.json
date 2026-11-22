@@ -1,0 +1,63 @@
+{
+  "gate": "save-compat",
+  "repository": "Dans-Plugins/More-Recipes",
+  "sha": "20d62bcb2d18455d01c84563fd1be8ac2089ebc4",
+  "baseline": "More-Recipes-1.7.0.jar",
+  "candidate": "More-Recipes-2.0.0.jar",
+  "candidateSha256": "6c3b5dab51387fbcd65a092e9bb1f3520cbdfcb334c110dbd8ceaad6baa2594b",
+  "plugin": "More-Recipes",
+  "baselineVersion": "1.7.0",
+  "version": null,
+  "passed": false,
+  "backend": "h2",
+  "restartCycles": 1,
+  "counts": {},
+  "fixture": null,
+  "fixtureFiles": 0,
+  "assertions": [
+    {
+      "name": "backend",
+      "passed": true,
+      "detail": "h2 \u2014 the plugin's embedded default store; no overrides"
+    },
+    {
+      "name": "baseline-boot",
+      "passed": true,
+      "detail": "More-Recipes enabled v1.7.0"
+    },
+    {
+      "name": "config-overrides",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "scenario",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "bot-scenario",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "baseline-restart",
+      "passed": true,
+      "detail": "enabled over its own data; counts {}"
+    },
+    {
+      "name": "bot-scenario-counts",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "fixture",
+      "passed": false,
+      "detail": "nothing captured from ['plugins/More-Recipes']"
+    }
+  ],
+  "startedAt": "2026-11-21T04:12:54.090280+00:00",
+  "finishedAt": "2026-11-21T04:14:06.371963+00:00",
+  "initialCounts": {},
+  "referenceCounts": {}
+}

@@ -1,0 +1,193 @@
+{
+  "gate": "dependents",
+  "repository": "Dans-Plugins/Medieval-Factions",
+  "sha": "0ed8f6b7e9d5cf79b9307ab0fb7c5e225e7accd0",
+  "candidate": "medieval-factions-11.1.0-all.jar",
+  "candidateSha256": "a3d5d448a15c3a864e90db659342782584bc3284b434ff926f21019d51e3350e",
+  "plugin": "MedievalFactions",
+  "version": "11.1.0",
+  "dependents": [
+    {
+      "repository": "Dans-Plugins/Currencies",
+      "name": "Currencies",
+      "version": "3.11.0",
+      "tag": "v3.11.0",
+      "jar": "currencies-3.11.0-all.jar",
+      "installed": true,
+      "enabled_baseline": true,
+      "enabled_1": true,
+      "enabled_2": true,
+      "pre_existing": false,
+      "skipped": null,
+      "enabled_control": true
+    },
+    {
+      "repository": "Dans-Plugins/Fiefs",
+      "name": "Fiefs",
+      "version": "1.2.1",
+      "tag": "v1.2.1",
+      "jar": "Fiefs-1.2.1.jar",
+      "installed": true,
+      "enabled_baseline": true,
+      "enabled_1": true,
+      "enabled_2": true,
+      "pre_existing": false,
+      "skipped": null,
+      "enabled_control": true
+    },
+    {
+      "repository": "Dans-Plugins/Democracy",
+      "name": "Democracy",
+      "version": "0.4.7",
+      "tag": "v0.4.7",
+      "jar": "Democracy-0.4.7.jar",
+      "installed": true,
+      "enabled_baseline": true,
+      "enabled_1": true,
+      "enabled_2": true,
+      "pre_existing": false,
+      "skipped": null,
+      "enabled_control": true
+    },
+    {
+      "repository": "Dans-Plugins/Bluemap_MedievalFactions",
+      "name": "MF_Bluemap",
+      "version": "1.1.7",
+      "tag": "v1.1.7",
+      "jar": "MF_Bluemap-1.1.7.jar",
+      "installed": true,
+      "enabled_baseline": true,
+      "enabled_1": true,
+      "enabled_2": true,
+      "pre_existing": false,
+      "skipped": null,
+      "enabled_control": true
+    }
+  ],
+  "passed": true,
+  "assertions": [
+    {
+      "name": "install-Currencies",
+      "passed": true,
+      "detail": "currencies-3.11.0-all.jar from v3.11.0; depend: ['MedievalFactions']"
+    },
+    {
+      "name": "install-Fiefs",
+      "passed": true,
+      "detail": "Fiefs-1.2.1.jar from v1.2.1; depend: ['MedievalFactions']"
+    },
+    {
+      "name": "install-Democracy",
+      "passed": true,
+      "detail": "Democracy-0.4.7.jar from v0.4.7; depend: ['MedievalFactions']"
+    },
+    {
+      "name": "install-MF_Bluemap",
+      "passed": true,
+      "detail": "MF_Bluemap-1.1.7.jar from v1.1.7; depend: ['MedievalFactions', 'BlueMap']"
+    },
+    {
+      "name": "boot-control",
+      "passed": true,
+      "detail": "reached Done"
+    },
+    {
+      "name": "enable-Currencies-baseline",
+      "passed": true,
+      "detail": "enabled v3.11.0"
+    },
+    {
+      "name": "enable-Fiefs-baseline",
+      "passed": true,
+      "detail": "enabled v1.2.1"
+    },
+    {
+      "name": "enable-Democracy-baseline",
+      "passed": true,
+      "detail": "enabled v0.4.7"
+    },
+    {
+      "name": "enable-MF_Bluemap-baseline",
+      "passed": true,
+      "detail": "enabled v1.1.7"
+    },
+    {
+      "name": "control",
+      "passed": true,
+      "detail": "Currencies: enables against the current stable; Fiefs: enables against the current stable; Democracy: enables against the current stable; MF_Bluemap: enables against the current stable"
+    },
+    {
+      "name": "boot-1",
+      "passed": true,
+      "detail": "reached Done"
+    },
+    {
+      "name": "candidate-enabled-1",
+      "passed": true,
+      "detail": "enabled v11.1.0 (expected 11.1.0)"
+    },
+    {
+      "name": "enable-Currencies-1",
+      "passed": true,
+      "detail": "enabled v3.11.0"
+    },
+    {
+      "name": "enable-Fiefs-1",
+      "passed": true,
+      "detail": "enabled v1.2.1"
+    },
+    {
+      "name": "enable-Democracy-1",
+      "passed": true,
+      "detail": "enabled v0.4.7"
+    },
+    {
+      "name": "enable-MF_Bluemap-1",
+      "passed": true,
+      "detail": "enabled v1.1.7"
+    },
+    {
+      "name": "stop-1",
+      "passed": true,
+      "detail": "clean stop; no database close failure, no *.trace.db"
+    },
+    {
+      "name": "boot-2",
+      "passed": true,
+      "detail": "reached Done"
+    },
+    {
+      "name": "candidate-enabled-2",
+      "passed": true,
+      "detail": "enabled v11.1.0"
+    },
+    {
+      "name": "enable-Currencies-2",
+      "passed": true,
+      "detail": "enabled v3.11.0"
+    },
+    {
+      "name": "enable-Fiefs-2",
+      "passed": true,
+      "detail": "enabled v1.2.1"
+    },
+    {
+      "name": "enable-Democracy-2",
+      "passed": true,
+      "detail": "enabled v0.4.7"
+    },
+    {
+      "name": "enable-MF_Bluemap-2",
+      "passed": true,
+      "detail": "enabled v1.1.7"
+    },
+    {
+      "name": "stop-2",
+      "passed": true,
+      "detail": "clean stop; no database close failure, no *.trace.db"
+    }
+  ],
+  "startedAt": "2026-11-21T03:11:37.707019+00:00",
+  "finishedAt": "2026-11-21T03:13:03.478184+00:00",
+  "preExisting": []
+}

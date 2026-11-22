@@ -1,0 +1,70 @@
+{
+  "gate": "boot",
+  "repository": "Dans-Plugins/PlayerLore",
+  "sha": "a5f9dd9bf6298dc775b14669e983c4c8339f913d",
+  "candidate": "PlayerLore-2.2.0.jar",
+  "candidateSha256": "50be70fb3abab02684961478c54439d5b9d85be7a8c2c12bc799180ab63b3542",
+  "minecraftVersion": "26.3",
+  "plugin": "PlayerLore",
+  "version": "2.2.0",
+  "passed": true,
+  "assertions": [
+    {
+      "name": "dependencies",
+      "passed": true,
+      "detail": "depend: []; supplied: []"
+    },
+    {
+      "name": "minecraft-version",
+      "passed": true,
+      "detail": "expected 26.3, server reports 26.3"
+    },
+    {
+      "name": "boot-1",
+      "passed": true,
+      "detail": "enabled v2.2.0"
+    },
+    {
+      "name": "version",
+      "passed": true,
+      "detail": "expected 2.2.0, got 2.2.0"
+    },
+    {
+      "name": "plugins-1",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "commands-1",
+      "passed": true,
+      "detail": "2 command(s): ['playerlore', 'pl']"
+    },
+    {
+      "name": "stop-1",
+      "passed": true,
+      "detail": "clean stop"
+    },
+    {
+      "name": "boot-2",
+      "passed": true,
+      "detail": "enabled v2.2.0"
+    },
+    {
+      "name": "plugins-2",
+      "passed": true,
+      "detail": ""
+    },
+    {
+      "name": "commands-2",
+      "passed": true,
+      "detail": "2 command(s): ['playerlore', 'pl']"
+    },
+    {
+      "name": "stop-2",
+      "passed": true,
+      "detail": "clean stop"
+    }
+  ],
+  "startedAt": "2026-11-21T04:16:37.817586+00:00",
+  "finishedAt": "2026-11-21T04:17:55.236430+00:00"
+}

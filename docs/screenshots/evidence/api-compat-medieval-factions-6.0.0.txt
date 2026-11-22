@@ -1,0 +1,12 @@
+medieval-factions-6.0.0-all.jar: 208 classes use Bukkit; supported Minecraft versions: 1.19.4, 1.21.11
+
+1.19.4: 8 problem(s)
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.HARMING does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.LONG_POISON does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.LONG_SLOWNESS does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.LONG_WEAKNESS does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.STRONG_HARMING does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.STRONG_POISON does not exist
+  AreaEffectCloudApplyListener: field org/bukkit/potion/PotionType.STRONG_SLOWNESS does not exist
+  MfDuelAcceptCommand: org/bukkit/attribute/Attribute.valueOf is called as an interface method, but org/bukkit/attribute/Attribute is a class
+1.21.11: every Bukkit reference resolves; bytecode fits Java 21

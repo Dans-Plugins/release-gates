@@ -1,0 +1,44 @@
+{
+  "out": ".",
+  "vars": { "pages": "file://{manifest_dir}/../../work/screenshot-pages" },
+  "defaults": { "kind": "still", "format": "png", "colors": 128, "crop": { "of": "main, pre", "pad": 0 } },
+  "devices": { "doc": { "width": 1100, "height": 1200 }, "term": { "width": 1000, "height": 400 } },
+  "shots": [
+    {
+      "name": "boot-gate-summary", "device": "doc", "url": "{pages}/boot-gate-summary.html",
+      "caption": "Boot gate job summary from a real run: PlayerLore 2.2.0 on Minecraft 26.3.",
+      "alt": "Boot gate job summary: PASSED, with a table of eleven assertions from dependencies through stop-2, each marked with a green check"
+    },
+    {
+      "name": "save-compat-summary", "device": "doc", "url": "{pages}/save-compat-summary.html",
+      "caption": "Save-compatibility gate job summary from a real run: MiniFactions 1.1.4 data loaded by 1.1.5.",
+      "alt": "Save-compatibility gate job summary: PASSED, MiniFactions v1.1.4 to v1.1.5 on H2, with every assertion checked"
+    },
+    {
+      "name": "save-compat-failed-summary", "device": "doc", "url": "{pages}/save-compat-failed-summary.html",
+      "caption": "A failing run: the save-compatibility gate stops at the first failed assertion.",
+      "alt": "Save-compatibility gate job summary: FAILED for More-Recipes, the fixture assertion marked with a red cross because nothing was captured from the plugin's data folder"
+    },
+    {
+      "name": "dependents-summary", "device": "doc", "url": "{pages}/dependents-summary.html",
+      "caption": "Dependents gate job summary from a real run: Medieval Factions 11.1.0 against the four plugins that depend on it.",
+      "alt": "Dependents gate job summary: PASSED, a table of Currencies, Fiefs, Democracy and MF_Bluemap all installed and enabled on both boots, followed by the assertion table"
+    },
+    {
+      "name": "behaviour-page", "device": "doc", "url": "{pages}/behaviour-page.html",
+      "crop": [0, 0, 1100, 1200],
+      "caption": "The behaviour gate's \"who can do what\" page (behaviour.md) from a real Medieval Factions 11.1.0 run.",
+      "alt": "Behaviour page titled 'Who can do what — MedievalFactions v11.1.0': a table of actions per role (member, ally, enemy, stranger, bypass, owner) in a claimed area, each cell a green check or red cross"
+    },
+    {
+      "name": "api-compat-pass", "device": "term", "url": "{pages}/api-compat-pass.html",
+      "caption": "check_api_compat.py on the Medieval Factions 11.1.0 jar: every reference resolves on all four supported versions.",
+      "alt": "Terminal: check_api_compat.py reports 272 classes using Bukkit in medieval-factions-11.1.0-all.jar and every Bukkit reference resolving on 1.19.4, 1.21.11, 26.2 and 26.3; exit code 0"
+    },
+    {
+      "name": "api-compat-fail", "device": "term", "url": "{pages}/api-compat-fail.html",
+      "caption": "check_api_compat.py on the Medieval Factions 6.0.0 jar: the 1.19.4 problems that made it fail to enable there.",
+      "alt": "Terminal: check_api_compat.py lists 8 problems on 1.19.4 for medieval-factions-6.0.0-all.jar, including PotionType.LONG_POISON does not exist; 1.21.11 resolves; exit code 1"
+    }
+  ]
+}
