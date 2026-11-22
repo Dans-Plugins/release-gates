@@ -12,6 +12,10 @@ A workflow's run log and its `result.json` artifact are the evidence; the policy
 
 These workflows publish nothing and hold no secrets. Their token is read-only.
 
+![Boot gate job summary from a real run: PASSED for Dans-Plugins/PlayerLore 2.2.0 on Minecraft 26.3, eleven assertions from dependencies to stop-2 each marked with a green check](docs/screenshots/boot-gate-summary.png)
+
+*The job summary of a real boot-gate run (PlayerLore 2.2.0 on Minecraft 26.3). More in [Screenshots](#screenshots).*
+
 ## Gates
 
 | Workflow | Proves | Status |
@@ -22,6 +26,25 @@ These workflows publish nothing and hold no secrets. Their token is read-only.
 | [`gates/check_api_compat.py`](gates/check_api_compat.py) | Every Bukkit class, field and method the jar uses exists on each Minecraft version in the repository's `minecraft-versions.json`, and its bytecode fits the Java each one runs on — run in each plugin's own CI on every build, see [API-compatibility check](#api-compatibility-check) | available |
 | [`dependents.yml`](.github/workflows/dependents.yml) | Every plugin that `depend:`s on the candidate — each one's current stable release — still enables when the candidate replaces the dependency it was built against, across a clean stop and a second boot | available |
 | [`behaviour-gate.yml`](.github/workflows/behaviour-gate.yml) | For every row of a behaviour table (who does what to which target, where, under which config), the candidate's outcome in the world is the same as the current stable release's, played by mineflayer bots on fresh data for each jar; a row that changed is replayed on both before it counts. Stephenson-Software RFC 0017 (T4) | available (advisory) |
+
+## Screenshots
+
+Every image below comes from a real run. The job summaries are the output of each workflow's own
+`Summarize` step over a `result.json` downloaded from that run's evidence artifact; the terminal
+shots are the captured output of `gates/check_api_compat.py` on released Medieval Factions jars.
+
+| | |
+|---|---|
+| ![Save-compatibility gate summary: PASSED, MiniFactions v1.1.4 data loaded by v1.1.5 on the H2 store, every assertion checked](docs/screenshots/save-compat-summary.png) | ![Save-compatibility gate summary: FAILED for More-Recipes, the fixture assertion marked with a red cross because nothing was captured from the plugin's data folder](docs/screenshots/save-compat-failed-summary.png) |
+| **Save-compatibility gate**: MiniFactions 1.1.4 → 1.1.5, passed | **Save-compatibility gate** stopping at its first failed assertion (More-Recipes) |
+| ![Dependents gate summary: PASSED, Currencies, Fiefs, Democracy and MF_Bluemap all installed and enabled on both boots against Medieval Factions 11.1.0](docs/screenshots/dependents-summary.png) | ![Behaviour page 'Who can do what — MedievalFactions v11.1.0': actions per role in a claimed area, each cell a green check or a red cross](docs/screenshots/behaviour-page.png) |
+| **Dependents gate**: Medieval Factions 11.1.0 and the four plugins that depend on it | **Behaviour gate**: the "who can do what" page (`behaviour.md`) of a Medieval Factions 11.1.0 run |
+| ![Terminal: check_api_compat.py finds every Bukkit reference in medieval-factions-11.1.0-all.jar resolving on 1.19.4, 1.21.11, 26.2 and 26.3; exit code 0](docs/screenshots/api-compat-pass.png) | ![Terminal: check_api_compat.py lists 8 problems on 1.19.4 for medieval-factions-6.0.0-all.jar, including PotionType.LONG_POISON does not exist; exit code 1](docs/screenshots/api-compat-fail.png) |
+| **API-compatibility check**: Medieval Factions 11.1.0 passes | **API-compatibility check**: Medieval Factions 6.0.0 fails on 1.19.4 |
+
+Regenerating screenshots: `python3 docs/screenshots/render.py && darkroom shoot docs/screenshots/media.json`
+(the evidence files are in [`docs/screenshots/evidence/`](docs/screenshots/evidence); the shot list
+is [`media.json`](docs/screenshots/media.json), for [darkroom](https://github.com/Preponderous-Software/darkroom)).
 
 ## Boot gate
 
@@ -52,6 +75,20 @@ Between **dependencies** and **boot-1** the jars are deployed onto the server's 
 start; a server that never starts, never reaches `Done` or does not stop before the candidate
 boots fails as **baseline** — an image or runner problem, not the candidate's. The started and
 `Done` checks come before **minecraft-version**, the stop check after the jars are deployed.
+
+```mermaid
+flowchart TD
+    D[dependencies<br/>every depend: supplied] --> B0[server's first start<br/>reaches Done]
+    B0 --> V[minecraft-version<br/>server reports the asked-for version]
+    V --> J[deploy dependency jars + candidate,<br/>stop the server]
+    J --> B1[boot-1 → version → plugins-1 → commands-1 → stop-1]
+    B1 --> B2[boot-2 → plugins-2 → commands-2 → stop-2<br/>over the data folder boot 1 wrote]
+    B2 --> P([passed: result.json + evidence])
+    D -. fails .-> F([failed: run stops at the first failed assertion])
+    B0 -. never starts / no Done / no stop .-> FB([baseline: image or runner problem])
+    B1 -. fails .-> F
+    B2 -. fails .-> F
+```
 
 ### Several Minecraft versions
 
@@ -136,6 +173,10 @@ The check exits 1, and the build fails, when any version has a problem — every
 per version — and also when it could not check anything: no plugin jar or more than one is
 found, or no class in the jar references Bukkit (`nothing was checked`), so a misconfigured
 step cannot pass by checking nothing.
+
+![Terminal: check_api_compat.py lists 8 problems on 1.19.4 for medieval-factions-6.0.0-all.jar, among them PotionType.LONG_POISON does not exist and Attribute.valueOf called as an interface method; 1.21.11 resolves; exit code 1](docs/screenshots/api-compat-fail.png)
+
+*The check run on the released Medieval Factions 6.0.0 jar: the 1.19.4 problems that made it fail to enable there. The 11.1.0 jar passes on all four of its versions ([Screenshots](#screenshots)).*
 
 ## Install gate
 
@@ -537,6 +578,8 @@ the calling run, so a plugin's pull-request workflow can gate its own build. A c
 `behaviour.md`, a "who can do what" table of the candidate's observed outcomes
 (`gates/behaviour_page.py`).
 
+![The start of a real behaviour.md, 'Who can do what — MedievalFactions v11.1.0': one row per action, one column per role (member, ally, enemy, enemyAtWar, stranger, bypass, owner), each cell a green check or a red cross](docs/screenshots/behaviour-page.png)
+
 Inputs — the same for `workflow_dispatch` and `workflow_call`, except the two marked
 call-only:
 
@@ -601,7 +644,7 @@ Every run uploads an artifact `<gate>-<run id>` containing `result.json` and `se
 (the full console; the behaviour gate's logs are named per job, see below). Each but the
 behaviour gate's also holds `usage-reporting.txt` — the wrapper's
 `USAGE_REPORTING_TAGS` and the server's `plugins/trace/config.yml` at the end of the run
-(see [Usage reporting](#usage-reporting)). The job summary shows the assertion table.
+(see [Usage reporting](#usage-reporting)). The job summary shows the assertion table (see [Screenshots](#screenshots)).
 Every gate's `result.json` also carries `startedAt` and `finishedAt` (UTC, ISO 8601), whether
 or not its field list below names them. A field written partway through a run is absent from
 the result of a run that stopped before that point: `initialCounts` and `referenceCounts` in

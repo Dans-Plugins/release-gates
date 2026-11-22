@@ -1,0 +1,5 @@
+medieval-factions-11.1.0-all.jar: 272 classes use Bukkit; supported Minecraft versions: 1.19.4, 1.21.11, 26.2, 26.3
+1.19.4: every Bukkit reference resolves; bytecode fits Java 17
+1.21.11: every Bukkit reference resolves; bytecode fits Java 21
+26.2: every Bukkit reference resolves; bytecode fits Java 25
+26.3: every Bukkit reference resolves; bytecode fits Java 25

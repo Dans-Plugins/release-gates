@@ -1,0 +1,103 @@
+{
+  "gate": "save-compat",
+  "repository": "Dans-Plugins/MiniFactions",
+  "sha": "4b30e6d8249ea5d35afdf4614fd4282713bb88c9",
+  "baseline": "MiniFactions-1.1.4.jar",
+  "candidate": "MiniFactions-1.1.5.jar",
+  "candidateSha256": "eef8f16bbbb4c8a4e9e1d095acc4d27e32a33c0c37d36b413c874e4ce3ca0456",
+  "plugin": "MiniFactions",
+  "baselineVersion": "1.1.4",
+  "version": "1.1.5",
+  "passed": true,
+  "backend": "h2",
+  "restartCycles": 1,
+  "counts": {},
+  "fixture": null,
+  "fixtureFiles": 5,
+  "assertions": [
+    {
+      "name": "backend",
+      "passed": true,
+      "detail": "h2 \u2014 the plugin's embedded default store; no overrides"
+    },
+    {
+      "name": "baseline-boot",
+      "passed": true,
+      "detail": "MiniFactions enabled v1.1.4"
+    },
+    {
+      "name": "config-overrides",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "scenario",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "bot-scenario",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "baseline-restart",
+      "passed": true,
+      "detail": "enabled over its own data; counts {}"
+    },
+    {
+      "name": "bot-scenario-counts",
+      "passed": true,
+      "detail": "none"
+    },
+    {
+      "name": "fixture",
+      "passed": true,
+      "detail": "5 file(s) from ['plugins/MiniFactions']"
+    },
+    {
+      "name": "candidate-boot-1",
+      "passed": true,
+      "detail": "enabled v1.1.5 (expected 1.1.5)"
+    },
+    {
+      "name": "counts-1",
+      "passed": true,
+      "detail": "baseline logged no counts"
+    },
+    {
+      "name": "files-kept-1",
+      "passed": true,
+      "detail": "5/5 kept; changed ['plugins/MiniFactions/config.yml']"
+    },
+    {
+      "name": "stop-1",
+      "passed": true,
+      "detail": "clean stop; no database close failure, no new or grown *.trace.db"
+    },
+    {
+      "name": "candidate-boot-2",
+      "passed": true,
+      "detail": "enabled v1.1.5"
+    },
+    {
+      "name": "counts-2",
+      "passed": true,
+      "detail": "baseline logged no counts"
+    },
+    {
+      "name": "files-kept-2",
+      "passed": true,
+      "detail": "5/5 kept; changed ['plugins/MiniFactions/config.yml']"
+    },
+    {
+      "name": "stop-2",
+      "passed": true,
+      "detail": "clean stop; no database close failure, no new or grown *.trace.db"
+    }
+  ],
+  "startedAt": "2026-11-21T04:01:57.659035+00:00",
+  "finishedAt": "2026-11-21T04:03:41.210507+00:00",
+  "initialCounts": {},
+  "referenceCounts": {}
+}
