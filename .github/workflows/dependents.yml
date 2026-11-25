@@ -308,14 +308,26 @@ jobs:
           r = json.load(open(p))
           print(f"## Dependents gate — {'PASSED' if r['passed'] else 'FAILED'}")
           print(f"`{r['repository']}` @ `{r['sha']}` — {r['plugin']} v{r.get('version')}\n")
-          print("| dependent | plugin | version | installed | enabled (boot 1) | enabled (boot 2) | skipped |\n|---|---|---|---|---|---|---|")
+          print("| dependent | plugin | version | installed | enabled (control) | enabled (boot 1) | enabled (boot 2) | skipped |\n|---|---|---|---|---|---|---|---|")
           yn = lambda b: '✅' if b else '❌'
+          # enabled_baseline is null when there was no control phase (no baseline_jar_url) or the
+          # dependent was not installed. A dependent that already failed against the current
+          # stable does not fail the gate when it fails again, so it is not shown as a plain ❌.
+          ctl = lambda d: '—' if d.get('enabled_baseline') is None else yn(d['enabled_baseline'])
+          en = lambda d, k: 'pre-existing' if d.get('pre_existing') and not d[k] else yn(d[k])
           for d in r["dependents"]:
               if d.get("skipped"):
-                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | — | — | — | {d['skipped']} |")
+                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | — | — | — | — | {d['skipped']} |")
               else:
-                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | {yn(d['installed'])} | {yn(d['enabled_1'])} | {yn(d['enabled_2'])} | |")
+                  print(f"| {d['repository']} | {d.get('name') or ''} | {d.get('version') or ''} | {yn(d['installed'])} | {ctl(d)} | {en(d, 'enabled_1')} | {en(d, 'enabled_2')} | |")
           print()
+          if r.get("preExisting"):
+              print(f"Pre-existing (already failing against the current stable; not held against the candidate): {', '.join(r['preExisting'])}\n")
+          if r.get("baselineCloseFailure"):
+              print(f"Baseline close failure (the current stable left a trace file after its control-phase shutdown; not held against the candidate): {', '.join(r['baselineCloseFailure'])}\n")
+          if "closeFailureWithBrokenDependents" in r:
+              files = ', '.join(r['closeFailureWithBrokenDependents']) or 'console lines only, no trace file'
+              print(f"Close failure excused because a pre-existing dependent was installed: {files}\n")
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:
               print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")

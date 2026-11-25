@@ -464,6 +464,8 @@ jobs:
               for leg in r["migrationRoundtrip"]["legs"]:
                   print(f"| {leg['from']} → {leg['to']} | {leg.get('migration', '')} | {leg.get('countsDetail', '')} |")
               print()
+          if r.get("baselineCloseFailure"):
+              print(f"Baseline close failure (the baseline left a trace file after its own shutdowns; not held against the candidate): {', '.join(r['baselineCloseFailure'])}\n")
           print("| assertion | result | detail |\n|---|---|---|")
           for a in r["assertions"]:
               print(f"| {a['name']} | {'✅' if a['passed'] else '❌'} | {a['detail']} |")
